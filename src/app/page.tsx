@@ -3,7 +3,7 @@
 
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { Button } from "@/components/ui/button";
-import { PlusCircle, AlertTriangle } from "lucide-react";
+import { PlusCircle, AlertTriangle, Search } from "lucide-react";
 import { Header } from "@/components/layout/Header";
 import { PurchaseItemForm, type PurchaseItemFormData } from "@/components/buildmaster/PurchaseItemForm";
 import { PurchaseItemCard } from "@/components/buildmaster/PurchaseItemCard";
@@ -36,6 +36,7 @@ export default function BuildMasterPage() {
 
   const [sortConfig, setSortConfig] = useState<SortConfig>({ field: 'name', direction: 'asc' });
   const [filterStatus, setFilterStatus] = useState<FilterStatus>('All');
+  const [searchTerm, setSearchTerm] = useState<string>('');
   
   const [isClient, setIsClient] = useState(false);
 
@@ -45,39 +46,34 @@ export default function BuildMasterPage() {
         console.warn(`Data version mismatch. Expected ${APP_DATA_VERSION}, found ${appData.version}. Consider migrating data.`);
     }
 
-    // One-time shallow migration for items from old structure
     setAppData(prev => {
       const migratedItems = prev.items.map(item => {
-        const oldItem = item as any; // To access potentially old fields
-        if (!item.individualPayments && typeof oldItem.paidAmount !== 'undefined' && typeof oldItem.paymentsMade !== 'undefined') {
-          const newIndividualPayments = Array(item.numberOfPayments || 1).fill(0);
-          if (oldItem.paymentsMade === 1 && item.numberOfPayments === 1 && oldItem.paidAmount > 0) {
-            newIndividualPayments[0] = oldItem.paidAmount;
-          } else if (oldItem.paymentsMade > 0 && item.numberOfPayments > 0 && oldItem.paidAmount > 0) {
-            // This is a lossy conversion for multi-payment old items.
-            // We can put the total paid amount into the first payment slot if number of payments is 1.
-            // Or distribute if paymentsMade and numberOfPayments match.
-            // For simplicity, if it was multi-payment, let user re-enter.
-            if (item.numberOfPayments === 1) {
-                 newIndividualPayments[0] = oldItem.paidAmount;
-            }
+        const oldItem = item as any; 
+        let individualPayments = item.individualPayments;
+        let numberOfPayments = item.numberOfPayments ?? 1;
+
+        if (!individualPayments && typeof oldItem.paidAmount !== 'undefined') {
+          individualPayments = Array(numberOfPayments).fill(0);
+          if (oldItem.paymentsMade === 1 && numberOfPayments === 1 && oldItem.paidAmount > 0) {
+            individualPayments[0] = oldItem.paidAmount;
           }
-          return {
-            ...item,
-            individualPayments: newIndividualPayments,
-            paidAmount: undefined, // Remove old field
-            paymentsMade: undefined, // Remove old field
-          } as StoredPurchaseItem;
-        }
-        // Ensure individualPayments array matches numberOfPayments
-        if (item.individualPayments && item.individualPayments.length !== (item.numberOfPayments || 1)) {
-            const correctedPayments = Array(item.numberOfPayments || 1).fill(0);
-            for(let i=0; i< Math.min(item.individualPayments.length, correctedPayments.length); i++) {
-                correctedPayments[i] = item.individualPayments[i];
+        } else if (individualPayments && individualPayments.length !== numberOfPayments) {
+            const correctedPayments = Array(numberOfPayments).fill(0);
+            for(let i=0; i< Math.min(individualPayments.length, correctedPayments.length); i++) {
+                correctedPayments[i] = individualPayments[i];
             }
-            return {...item, individualPayments: correctedPayments};
+            individualPayments = correctedPayments;
+        } else if (!individualPayments) {
+            individualPayments = Array(numberOfPayments).fill(0);
         }
-        return item;
+        
+        return {
+            ...item,
+            numberOfPayments,
+            individualPayments,
+            paidAmount: undefined, 
+            paymentsMade: undefined, 
+          } as StoredPurchaseItem;
       });
       if (JSON.stringify(prev.items) !== JSON.stringify(migratedItems)) {
         return { ...prev, items: migratedItems };
@@ -174,7 +170,7 @@ export default function BuildMasterPage() {
     setAppData(prev => {
       const updatedItems = prev.items.map(item => {
         if (item.id === itemId) {
-          const newIndividualPayments = [...item.individualPayments];
+          const newIndividualPayments = [...(item.individualPayments || Array(item.numberOfPayments || 1).fill(0))];
           let paymentLogged = false;
           for (let i = 0; i < newIndividualPayments.length; i++) {
             if ((newIndividualPayments[i] === 0 || newIndividualPayments[i] === undefined) && !paymentLogged) {
@@ -185,17 +181,16 @@ export default function BuildMasterPage() {
           }
           
           if (paymentLogged) {
-             // Recalculate total paid to ensure it doesn't exceed total price
             let currentTotalPaid = newIndividualPayments.reduce((sum, p) => sum + (p || 0), 0);
             if (currentTotalPaid > item.totalPrice) {
-                // If overpaid due to this payment, adjust this payment
                 const overPayment = currentTotalPaid - item.totalPrice;
-                const lastLoggedPaymentIndex = newIndividualPayments.indexOf(paymentAmount); // find the current payment
+                const lastLoggedPaymentIndex = newIndividualPayments.findIndex((p, idx) => idx >= 0 && (newIndividualPayments[idx] === paymentAmount && (newIndividualPayments.slice(0, idx).filter(val => val === paymentAmount).length === 0)));
+
+
                  if (lastLoggedPaymentIndex !== -1) {
                     newIndividualPayments[lastLoggedPaymentIndex] = Math.max(0, paymentAmount - overPayment);
                  }
             }
-
             return { 
               ...item, 
               individualPayments: newIndividualPayments
@@ -233,6 +228,12 @@ export default function BuildMasterPage() {
     if (filterStatus !== 'All') {
       items = items.filter(item => item.status === filterStatus);
     }
+
+    if (searchTerm) {
+      items = items.filter(item =>
+        item.name.toLowerCase().includes(searchTerm.toLowerCase())
+      );
+    }
     
     items.sort((a, b) => {
       let valA = a[sortConfig.field];
@@ -242,11 +243,10 @@ export default function BuildMasterPage() {
         const statusOrder: Record<ItemStatus, number> = { 'Pending': 1, 'Partially Paid': 2, 'Paid': 3 };
         valA = statusOrder[a.status];
         valB = statusOrder[b.status];
-      } else if (sortConfig.field === 'paidAmount') { // Ensure derived paidAmount is used for sorting
+      } else if (sortConfig.field === 'paidAmount') { 
         valA = a.paidAmount;
         valB = b.paidAmount;
       }
-
 
       let comparison = 0;
       if (typeof valA === 'string' && typeof valB === 'string') {
@@ -259,7 +259,7 @@ export default function BuildMasterPage() {
     });
 
     return items;
-  }, [appData.items, filterStatus, sortConfig]);
+  }, [appData.items, filterStatus, sortConfig, searchTerm]);
 
 
   if (!isClient) {
@@ -297,8 +297,10 @@ export default function BuildMasterPage() {
         <SortFilterControls
           sortConfig={sortConfig}
           filterStatus={filterStatus}
+          searchTerm={searchTerm}
           onSortChange={handleSortChange}
           onFilterChange={setFilterStatus}
+          onSearchChange={setSearchTerm}
         />
         
         {displayItems.length > 0 ? (
@@ -319,8 +321,10 @@ export default function BuildMasterPage() {
           <Card className="col-span-full text-center py-12 shadow">
             <CardContent className="flex flex-col items-center gap-4">
               <AlertTriangle className="h-12 w-12 text-muted-foreground" />
-              <p className="text-xl font-medium">No components added yet.</p>
-              <p className="text-muted-foreground">Click "Add Item" to start building your list!</p>
+              <p className="text-xl font-medium">No components found.</p>
+              <p className="text-muted-foreground">
+                {searchTerm ? "Try adjusting your search or filter criteria." : "Click \"Add Item\" to start building your list!"}
+              </p>
             </CardContent>
           </Card>
         )}

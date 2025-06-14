@@ -3,14 +3,17 @@
 
 import type { SortConfig, FilterStatus, SortableField } from "@/types";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { ArrowDownUp, Filter } from "lucide-react";
+import { ArrowDownUp, Filter, Search } from "lucide-react";
 
 interface SortFilterControlsProps {
   sortConfig: SortConfig;
   filterStatus: FilterStatus;
+  searchTerm: string;
   onSortChange: (field: SortableField) => void;
   onFilterChange: (status: FilterStatus) => void;
+  onSearchChange: (term: string) => void;
 }
 
 const sortableFields: { value: SortableField; label: string }[] = [
@@ -18,7 +21,6 @@ const sortableFields: { value: SortableField; label: string }[] = [
   { value: "totalPrice", label: "Total Price" },
   { value: "paidAmount", label: "Amount Paid" },
   { value: "status", label: "Status" },
-  // { value: "estimatedCompletionDate", label: "Est. Completion" }, // Removed
 ];
 
 const filterStatuses: { value: FilterStatus; label: string }[] = [
@@ -28,9 +30,28 @@ const filterStatuses: { value: FilterStatus; label: string }[] = [
   { value: "Paid", label: "Paid" },
 ];
 
-export function SortFilterControls({ sortConfig, filterStatus, onSortChange, onFilterChange }: SortFilterControlsProps) {
+export function SortFilterControls({ 
+  sortConfig, 
+  filterStatus, 
+  searchTerm,
+  onSortChange, 
+  onFilterChange,
+  onSearchChange
+}: SortFilterControlsProps) {
   return (
-    <div className="my-6 p-4 bg-card rounded-lg shadow flex flex-col sm:flex-row justify-between items-center gap-4">
+    <div className="my-6 p-4 bg-card rounded-lg shadow flex flex-col sm:flex-row flex-wrap justify-between items-center gap-4">
+      <div className="flex items-center gap-2 w-full sm:w-auto sm:flex-1 lg:flex-none lg:w-[220px] relative">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
+        <Input
+            type="text"
+            placeholder="Search components..."
+            value={searchTerm}
+            onChange={(e) => onSearchChange(e.target.value)}
+            className="pl-9 w-full"
+            aria-label="Search components by name"
+        />
+      </div>
+      
       <div className="flex items-center gap-2 w-full sm:w-auto">
         <ArrowDownUp className="h-5 w-5 text-primary" />
         <Select
