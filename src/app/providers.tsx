@@ -96,7 +96,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       await signInWithEmailAndPassword(auth, email, pass);
     } catch (error) {
-      setAuthError((error as AuthError).message || 'Failed to login.');
+      const firebaseError = error as AuthError;
+      if (firebaseError.code === 'auth/invalid-credential' || firebaseError.code === 'auth/user-not-found' || firebaseError.code === 'auth/wrong-password') {
+        setAuthError("Invalid email or password. Please check your credentials and try again.");
+      } else {
+        setAuthError(firebaseError.message || 'Failed to login.');
+      }
       console.error("Login error:", error);
     } finally {
       setLoading(false);
@@ -109,7 +114,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       await createUserWithEmailAndPassword(auth, email, pass);
     } catch (error) {
-      setAuthError((error as AuthError).message || 'Failed to sign up.');
+      const firebaseError = error as AuthError;
+      if (firebaseError.code === 'auth/email-already-in-use') {
+        setAuthError('This email address is already in use. Please try logging in or use a different email.');
+      } else {
+        setAuthError(firebaseError.message || 'Failed to sign up.');
+      }
       console.error("Signup error:", error);
     } finally {
       setLoading(false);
