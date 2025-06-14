@@ -433,15 +433,7 @@ export default function BuildListPage() {
     <div className="min-h-screen bg-background text-foreground flex flex-col">
       <Header />
       <main className="container mx-auto px-4 py-8 flex-grow">
-        <div className="mb-6">
-            <Link href="/" passHref>
-                <Button variant="outline" size="sm" disabled={isOperating}>
-                    <ArrowLeft className="mr-2 h-4 w-4" />
-                    Back to All Lists
-                </Button>
-            </Link>
-        </div>
-
+        
         <h1 className="text-4xl font-headline text-center mb-2 text-primary">{currentList.name}</h1>
         <p className="text-center text-muted-foreground mb-8">Manage components and budget for this build.</p>
 
@@ -543,3 +535,4 @@ export default function BuildListPage() {
     </div>
   );
 }
+
