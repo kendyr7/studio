@@ -34,20 +34,12 @@ const purchaseItemSchema = z.object({
   name: z.string().min(1, { message: "Product name is required." }).max(100),
   totalPrice: z.coerce.number().min(0, { message: "Total price must be non-negative." }),
   paidAmount: z.coerce.number().min(0, { message: "Paid amount must be non-negative." }),
-  numberOfPayments: z.coerce.number().int().min(0, { message: "Number of payments must be non-negative."}).default(1),
+  numberOfPayments: z.coerce.number().int().min(1, { message: "Number of payments must be at least 1."}).default(1),
   notes: z.string().max(500).optional(),
   includeInSpendCalculation: z.boolean().default(true),
 }).refine(data => data.paidAmount <= data.totalPrice, {
   message: "Paid amount cannot exceed total price.",
   path: ["paidAmount"],
-}).refine(data => {
-  if (data.totalPrice > 0 && data.numberOfPayments <= 0) {
-    return false;
-  }
-  return true;
-}, {
-  message: "Number of payments must be at least 1 if total price is greater than 0.",
-  path: ["numberOfPayments"],
 });
 
 export type PurchaseItemFormData = z.infer<typeof purchaseItemSchema>;
@@ -69,28 +61,30 @@ export function PurchaseItemForm({
 }: PurchaseItemFormProps) {
 
   const getSafeFormValues = React.useCallback((data?: StoredPurchaseItem) => {
-    if (data) {
-      return {
-        name: data.name || "",
-        totalPrice: data.totalPrice ?? 0,
-        paidAmount: data.paidAmount ?? 0,
-        numberOfPayments: (data.numberOfPayments === undefined || data.numberOfPayments === null)
-                          ? (data.totalPrice > 0 ? 1 : 0) // Default based on totalPrice if undefined
-                          : data.numberOfPayments,
-        notes: data.notes || "",
-        includeInSpendCalculation: data.includeInSpendCalculation ?? true,
-      };
-    }
-    // Defaults for a new item
-    return {
+    const defaults = {
       name: "",
       totalPrice: 0,
       paidAmount: 0,
-      numberOfPayments: 1,
+      numberOfPayments: 1, // Default to 1
       notes: "",
       includeInSpendCalculation: true,
     };
-  }, []); // No dependencies needed as initialData is passed as argument
+
+    if (data) {
+      return {
+        name: data.name || defaults.name,
+        totalPrice: data.totalPrice ?? defaults.totalPrice,
+        paidAmount: data.paidAmount ?? defaults.paidAmount,
+        // Ensure numberOfPayments is at least 1, or use default if not present
+        numberOfPayments: (data.numberOfPayments !== undefined && data.numberOfPayments !== null && data.numberOfPayments >= 1)
+                          ? data.numberOfPayments
+                          : defaults.numberOfPayments,
+        notes: data.notes || defaults.notes,
+        includeInSpendCalculation: data.includeInSpendCalculation ?? defaults.includeInSpendCalculation,
+      };
+    }
+    return defaults;
+  }, []);
 
   const form = useForm<PurchaseItemFormData>({
     resolver: zodResolver(purchaseItemSchema),
@@ -98,21 +92,20 @@ export function PurchaseItemForm({
   });
 
   React.useEffect(() => {
-    // When initialData changes, reset the form with potentially new defaults
     form.reset(getSafeFormValues(initialData));
   }, [initialData, form, getSafeFormValues]);
 
 
   const handleFormSubmit = (data: PurchaseItemFormData) => {
     onSubmit(data);
-    onOpenChange(false); // This will trigger the onOpenChange logic below to reset form
+    onOpenChange(false); 
   };
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => {
       onOpenChange(open);
       if (!open) {
-        form.reset(getSafeFormValues(initialData)); // Reset form with correct defaults when dialog closes
+        form.reset(getSafeFormValues(initialData)); 
       }
     }}>
       <DialogContent className="sm:max-w-[480px] bg-card text-card-foreground">
@@ -174,7 +167,7 @@ export function PurchaseItemForm({
                 <FormItem>
                   <FormLabel>Number of Payments</FormLabel>
                   <FormControl>
-                    <Input type="number" step="1" placeholder="e.g., 3" {...field} />
+                    <Input type="number" step="1" min="1" placeholder="e.g., 3" {...field} />
                   </FormControl>
                   <FormMessage />
                 </FormItem>

@@ -7,15 +7,15 @@ import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { ItemStatusBadge } from "./ItemStatusBadge";
 import { Edit2, Trash2, StickyNote, ListChecks, CreditCard } from "lucide-react";
-import { formatCurrency, cn } from "@/lib/utils";
+import { formatCurrency } from "@/lib/utils";
 import { Checkbox } from '../ui/checkbox';
 
 interface PurchaseItemCardProps {
   item: PurchaseItem;
-  onEdit: (item: PurchaseItem) => void;
+  onEdit: (itemStored: PurchaseItem) => void; // Technically StoredPurchaseItem from appData, but PurchaseItem is safer for card use
   onDelete: (itemId: string) => void;
   onToggleIncludeInSpend: (itemId: string, include: boolean) => void;
-  onLogPayment: (itemId: string) => void;
+  onOpenLogPaymentModal: (item: PurchaseItem) => void;
   currencySymbol?: string;
 }
 
@@ -24,14 +24,23 @@ export function PurchaseItemCard({
     onEdit, 
     onDelete, 
     onToggleIncludeInSpend, 
-    onLogPayment, 
+    onOpenLogPaymentModal,
     currencySymbol = "$" 
 }: PurchaseItemCardProps) {
   const progressPercentage = item.totalPrice > 0 ? (item.paidAmount / item.totalPrice) * 100 : (item.paidAmount > 0 ? 100 : 0);
-  const statusColor = item.status === 'Paid' ? 'hsl(var(--accent))' : item.status === 'Partially Paid' ? 'hsl(var(--primary))' : 'hsl(var(--muted))';
+  
+  const canLogPayment = item.paymentsMade < item.numberOfPayments && item.paidAmount < item.totalPrice;
+  
+  const paymentsMadeCount = item.paymentsMade ?? 0;
+  const numberOfPaymentsCount = item.numberOfPayments ?? 1;
 
-  const paymentSegments = Array.from({ length: item.numberOfPayments || 0 });
-  const canLogPayment = item.paymentsMade < item.numberOfPayments && item.numberOfPayments > 0 && item.paidAmount < item.totalPrice;
+  const logPaymentButtonText = () => {
+    if (numberOfPaymentsCount > 1) {
+      const nextPaymentNumber = paymentsMadeCount + 1;
+      return `Log Payment (${nextPaymentNumber > numberOfPaymentsCount ? numberOfPaymentsCount : nextPaymentNumber}/${numberOfPaymentsCount})`;
+    }
+    return "Log Payment";
+  };
 
   return (
     <Card className="flex flex-col h-full shadow-lg hover:shadow-primary/30 transition-shadow duration-300 ease-in-out">
@@ -50,26 +59,14 @@ export function PurchaseItemCard({
             <span>Overall Progress</span>
             <span>{formatCurrency(item.remainingBalance, currencySymbol)} remaining</span>
           </div>
-          <Progress value={progressPercentage} aria-label={`${item.name} payment progress`} style={{accentColor: statusColor}} className="h-2 [&>div]:bg-primary" />
+          <Progress value={progressPercentage} aria-label={`${item.name} payment progress`} className="h-2 [&>div]:bg-primary" />
         </div>
         
-        {item.numberOfPayments > 0 && (
+        {numberOfPaymentsCount > 1 && (
           <div className="mt-2">
             <div className="flex items-center text-xs text-muted-foreground mb-1">
               <ListChecks className="h-3.5 w-3.5 mr-1.5 shrink-0" />
-              Payments Logged: {item.paymentsMade} / {item.numberOfPayments}
-            </div>
-            <div className="flex space-x-1">
-              {paymentSegments.map((_, index) => (
-                <div
-                  key={index}
-                  className={cn(
-                    "h-2 flex-1 rounded-sm transition-colors duration-300",
-                    index < item.paymentsMade ? "bg-primary" : "bg-muted/30"
-                  )}
-                  title={`Payment ${index + 1} ${index < item.paymentsMade ? 'Logged' : 'Pending'}`}
-                />
-              ))}
+              Payments Logged: {paymentsMadeCount} / {numberOfPaymentsCount}
             </div>
           </div>
         )}
@@ -77,7 +74,7 @@ export function PurchaseItemCard({
         {item.notes && (
           <div className="flex items-start text-xs text-muted-foreground pt-1">
             <StickyNote className="h-3.5 w-3.5 mr-1.5 mt-0.5 shrink-0" />
-            <p className="truncate-3-lines">{item.notes}</p>
+            <p className="truncate-3-lines">{item.notes}</p> {/* Apply a class to truncate after 3 lines */}
           </div>
         )}
 
@@ -104,19 +101,19 @@ export function PurchaseItemCard({
                 </Button>
             </div>
         </div>
-        {item.numberOfPayments > 0 && (
-            <Button
-              variant="default"
-              size="sm"
-              onClick={() => onLogPayment(item.id)}
-              disabled={!canLogPayment}
-              className="w-full bg-accent hover:bg-accent/90 text-accent-foreground"
-            >
-              <CreditCard className="mr-2 h-4 w-4" />
-              Log Payment ({item.paymentsMade + 1}/{item.numberOfPayments})
-            </Button>
-        )}
+        
+        <Button
+            variant="default"
+            size="sm"
+            onClick={() => onOpenLogPaymentModal(item)}
+            disabled={!canLogPayment}
+            className="w-full bg-accent hover:bg-accent/90 text-accent-foreground"
+        >
+            <CreditCard className="mr-2 h-4 w-4" />
+            {logPaymentButtonText()}
+        </Button>
       </CardFooter>
     </Card>
   );
 }
+

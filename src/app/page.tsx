@@ -10,6 +10,7 @@ import { PurchaseItemCard } from "@/components/buildmaster/PurchaseItemCard";
 import { BudgetManager } from "@/components/buildmaster/BudgetManager";
 import { SummaryDashboard } from "@/components/buildmaster/SummaryDashboard";
 import { SortFilterControls } from "@/components/buildmaster/SortFilterControls";
+import { LogPaymentDialog } from "@/components/buildmaster/LogPaymentDialog";
 import useLocalStorage from "@/hooks/useLocalStorage";
 import type { StoredPurchaseItem, PurchaseItem as DisplayPurchaseItem, BudgetData, AppData, SortConfig, FilterStatus, SortableField, ItemStatus } from "@/types";
 import { APP_DATA_VERSION, LOCAL_STORAGE_KEY } from "@/lib/constants";
@@ -29,6 +30,9 @@ export default function BuildMasterPage() {
 
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<StoredPurchaseItem | undefined>(undefined);
+  
+  const [isLogPaymentModalOpen, setIsLogPaymentModalOpen] = useState(false);
+  const [itemToLogPaymentFor, setItemToLogPaymentFor] = useState<DisplayPurchaseItem | undefined>(undefined);
 
   const [sortConfig, setSortConfig] = useState<SortConfig>({ field: 'name', direction: 'asc' });
   const [filterStatus, setFilterStatus] = useState<FilterStatus>('All');
@@ -46,8 +50,8 @@ export default function BuildMasterPage() {
     const newItem: StoredPurchaseItem = {
       id: crypto.randomUUID(),
       ...data,
-      paymentsMade: 0, // Initialize paymentsMade for new items
-      numberOfPayments: data.numberOfPayments || (data.totalPrice > 0 ? 1 : 0), // Ensure numberOfPayments is set
+      paymentsMade: data.paidAmount > 0 && data.numberOfPayments === 1 && data.paidAmount === data.totalPrice ? 1 : 0, // If fully paid in one go, mark 1 payment made
+      numberOfPayments: data.numberOfPayments, // Already defaults to 1 in form
     };
     setAppData(prev => ({ ...prev, items: [...prev.items, newItem] }));
     toast({ title: "Item Added", description: `${data.name} has been added to your list.` });
@@ -58,9 +62,8 @@ export default function BuildMasterPage() {
     const updatedItem: StoredPurchaseItem = {
       ...editingItem,
       ...data,
-      numberOfPayments: data.numberOfPayments || (data.totalPrice > 0 ? 1 : 0),
-      // paymentsMade is preserved from editingItem unless it exceeds new numberOfPayments
-      paymentsMade: Math.min(editingItem.paymentsMade, data.numberOfPayments || (data.totalPrice > 0 ? 1 : 0))
+      // if paidAmount is 0, reset paymentsMade. Otherwise, cap paymentsMade by new numberOfPayments.
+      paymentsMade: data.paidAmount === 0 ? 0 : Math.min(editingItem.paymentsMade ?? 0, data.numberOfPayments),
     };
     setAppData(prev => ({
       ...prev,
@@ -113,20 +116,27 @@ export default function BuildMasterPage() {
       direction: current.field === field && current.direction === 'asc' ? 'desc' : 'asc',
     }));
   };
+  
+  const openLogPaymentModal = (item: DisplayPurchaseItem) => {
+    setItemToLogPaymentFor(item);
+    setIsLogPaymentModalOpen(true);
+  };
 
-  const handleLogPayment = useCallback((itemId: string) => {
+  const handleLogPayment = useCallback((itemId: string, paymentAmount: number) => {
     setAppData(prev => {
       const updatedItems = prev.items.map(item => {
         if (item.id === itemId) {
-          if (item.paymentsMade < item.numberOfPayments && item.numberOfPayments > 0 && item.paidAmount < item.totalPrice) {
-            const newPaymentsMade = item.paymentsMade + 1;
-            let newPaidAmount;
+          // Ensure paymentsMade and numberOfPayments are numbers
+          const currentPaymentsMade = item.paymentsMade ?? 0;
+          const totalNumberOfPayments = item.numberOfPayments ?? 1;
 
-            if (newPaymentsMade === item.numberOfPayments) {
-              newPaidAmount = item.totalPrice;
-            } else {
-              const paymentPerInstallment = item.totalPrice > 0 && item.numberOfPayments > 0 ? item.totalPrice / item.numberOfPayments : 0;
-              newPaidAmount = Math.min(item.totalPrice, item.paidAmount + paymentPerInstallment);
+          if (currentPaymentsMade < totalNumberOfPayments && item.paidAmount < item.totalPrice) {
+            const newPaymentsMade = currentPaymentsMade + 1;
+            let newPaidAmount = Math.min(item.totalPrice, (item.paidAmount ?? 0) + paymentAmount);
+
+            // If this payment makes it fully paid or it's the last designated payment
+            if (newPaidAmount >= item.totalPrice || newPaymentsMade === totalNumberOfPayments) {
+              newPaidAmount = item.totalPrice; // Ensure it's exactly total price
             }
             
             return { 
@@ -142,12 +152,24 @@ export default function BuildMasterPage() {
     });
     const itemData = appData.items.find(i => i.id === itemId);
     if (itemData) {
-      toast({ title: "Payment Logged", description: `Payment logged for ${itemData.name}.` });
+      toast({ title: "Payment Logged", description: `Payment of ${appData.budget.currencySymbol}${paymentAmount.toFixed(2)} logged for ${itemData.name}.` });
     }
-  }, [setAppData, appData.items, toast]);
+    setIsLogPaymentModalOpen(false);
+  }, [setAppData, appData.items, appData.budget.currencySymbol, toast]);
+
 
   const displayItems: DisplayPurchaseItem[] = useMemo(() => {
-    let items = appData.items.map(enrichPurchaseItem);
+    let items = appData.items.map(item => {
+      const storedItemWithDefaults: StoredPurchaseItem = {
+        ...item,
+        numberOfPayments: item.numberOfPayments ?? 1,
+        paymentsMade: item.paymentsMade ?? 0,
+        includeInSpendCalculation: item.includeInSpendCalculation ?? true,
+        paidAmount: item.paidAmount ?? 0,
+        totalPrice: item.totalPrice ?? 0,
+      };
+      return enrichPurchaseItem(storedItemWithDefaults);
+    });
 
     if (filterStatus !== 'All') {
       items = items.filter(item => item.status === filterStatus);
@@ -225,7 +247,7 @@ export default function BuildMasterPage() {
                 onEdit={() => openEditForm(appData.items.find(i => i.id === item.id)!)}
                 onDelete={handleDeleteItem}
                 onToggleIncludeInSpend={handleToggleIncludeInSpend}
-                onLogPayment={handleLogPayment}
+                onOpenLogPaymentModal={openLogPaymentModal}
                 currencySymbol={appData.budget.currencySymbol}
               />
             ))}
@@ -252,6 +274,13 @@ export default function BuildMasterPage() {
           onSubmit={editingItem ? handleEditItem : handleAddItem}
           initialData={editingItem}
           currencySymbol={appData.budget.currencySymbol}
+        />
+        <LogPaymentDialog
+          isOpen={isLogPaymentModalOpen}
+          onOpenChange={setIsLogPaymentModalOpen}
+          itemBeingPaid={itemToLogPaymentFor}
+          currencySymbol={appData.budget.currencySymbol}
+          onSubmitLogPayment={handleLogPayment}
         />
       </main>
       <footer className="text-center py-6 border-t border-border text-sm text-muted-foreground">
