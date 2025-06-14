@@ -1,14 +1,13 @@
 
 "use client";
 
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { Button } from "@/components/ui/button";
-import { PlusCircle, Trash2, ExternalLink, AlertTriangle, Home, Edit } from "lucide-react"; // Added Edit icon
+import { PlusCircle, Trash2, ExternalLink, AlertTriangle, Home, Edit } from "lucide-react";
 import { Header } from "@/components/layout/Header";
-import useLocalStorage from "@/hooks/useLocalStorage";
-import type { AllBuilds, BuildList, BuildListData, StoredPurchaseItem as OldStoredPurchaseItem, BudgetData as OldBudgetData } from "@/types";
-import { APP_DATA_VERSION, LOCAL_STORAGE_KEY_ALL_BUILDS, OLD_LOCAL_STORAGE_KEY } from "@/lib/constants";
+import type { BuildList, StoredPurchaseItem } from "@/types";
+import { APP_DATA_VERSION } from "@/lib/constants";
 import { useToast } from "@/hooks/use-toast";
 import {
   Dialog,
@@ -32,20 +31,29 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
-import { formatCurrency, enrichPurchaseItem } from '@/lib/utils'; // Added enrichPurchaseItem
+import { formatCurrency, enrichPurchaseItem } from '@/lib/utils';
+import { db } from '@/lib/firebaseConfig';
+import {
+  collection,
+  addDoc,
+  getDocs,
+  doc,
+  deleteDoc,
+  updateDoc,
+  query,
+  where,
+  orderBy,
+  Timestamp,
+  serverTimestamp,
+  collectionGroup,
+  getCountFromServer
+} from 'firebase/firestore';
 
-interface OldAppData {
-  version: string;
-  budget: OldBudgetData;
-  items: OldStoredPurchaseItem[];
-}
-
-const initialAllBuilds: AllBuilds = {
-  lists: [],
-};
+// Placeholder user ID. In a real app, this would come from Firebase Auth.
+const PLACEHOLDER_USER_ID = "default-user";
 
 export default function HomePage() {
-  const [allBuilds, setAllBuilds] = useLocalStorage<AllBuilds>(LOCAL_STORAGE_KEY_ALL_BUILDS, initialAllBuilds);
+  const [buildLists, setBuildLists] = useState<BuildList[]>([]);
   const { toast } = useToast();
 
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
@@ -56,97 +64,97 @@ export default function HomePage() {
   const [listToEditName, setListToEditName] = useState<BuildList | null>(null);
   const [editingListName, setEditingListName] = useState("");
   
-  const [isClient, setIsClient] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    setIsClient(true);
-    
-    const oldDataRaw = typeof window !== 'undefined' ? window.localStorage.getItem(OLD_LOCAL_STORAGE_KEY) : null;
-    const newDataRaw = typeof window !== 'undefined' ? window.localStorage.getItem(LOCAL_STORAGE_KEY_ALL_BUILDS) : null;
-
-    if (oldDataRaw && !newDataRaw) {
+    const fetchBuildLists = async () => {
+      setIsLoading(true);
       try {
-        const oldData: OldAppData = JSON.parse(oldDataRaw);
-        if (oldData && oldData.items && oldData.budget) {
+        const q = query(
+          collection(db, "buildLists"),
+          where("userId", "==", PLACEHOLDER_USER_ID),
+          orderBy("createdAt", "desc")
+        );
+        const querySnapshot = await getDocs(q);
+        const lists: BuildList[] = [];
+        for (const docSnap of querySnapshot.docs) {
+          const listData = docSnap.data();
           
-          const migratedItems = oldData.items.map(item => {
-            const oldItem = item as any;
-            let individualPayments = item.individualPayments;
-            let numberOfPayments = item.numberOfPayments ?? 1;
-    
-            if (!individualPayments && typeof oldItem.paidAmount !== 'undefined') {
-              individualPayments = Array(numberOfPayments).fill(0);
-              if (oldItem.paymentsMade === 1 && numberOfPayments === 1 && oldItem.paidAmount > 0) {
-                individualPayments[0] = oldItem.paidAmount;
-              }
-            } else if (individualPayments && individualPayments.length !== numberOfPayments) {
-                const correctedPayments = Array(numberOfPayments).fill(0);
-                for(let i=0; i< Math.min(individualPayments.length, correctedPayments.length); i++) {
-                    correctedPayments[i] = individualPayments[i];
-                }
-                individualPayments = correctedPayments;
-            } else if (!individualPayments) {
-                individualPayments = Array(numberOfPayments).fill(0);
-            }
-            
-            return {
-                id: item.id,
-                name: item.name,
-                totalPrice: item.totalPrice ?? 0,
-                notes: item.notes,
-                numberOfPayments: numberOfPayments,
-                individualPayments: individualPayments,
-                includeInSpendCalculation: item.includeInSpendCalculation ?? true,
-              } as OldStoredPurchaseItem;
-          });
+          // Fetch items for each list to calculate overview stats
+          // This is N+1, consider optimizing for many lists (e.g., aggregated fields in Firestore)
+          const itemsColRef = collection(db, "buildLists", docSnap.id, "items");
+          const itemsSnapshot = await getDocs(itemsColRef);
+          const items = itemsSnapshot.docs.map(itemDoc => ({ id: itemDoc.id, ...itemDoc.data() } as StoredPurchaseItem));
 
-          const migratedList: BuildList = {
-            id: crypto.randomUUID(),
-            name: "My Migrated Build",
-            createdAt: new Date().toISOString(),
-            version: APP_DATA_VERSION,
-            budget: oldData.budget,
-            items: migratedItems,
-          };
-          setAllBuilds({ lists: [migratedList] });
-          if (typeof window !== 'undefined') window.localStorage.removeItem(OLD_LOCAL_STORAGE_KEY);
-          toast({ title: "Data Migrated", description: "Your previous build has been moved to a new list." });
+          lists.push({
+            id: docSnap.id,
+            name: listData.name,
+            createdAt: (listData.createdAt as Timestamp)?.toDate().toISOString() || new Date().toISOString(),
+            version: listData.version,
+            budget: listData.budget,
+            userId: listData.userId,
+            items: items, // Include items for overview calculation
+          });
         }
+        setBuildLists(lists);
       } catch (error) {
-        console.error("Error migrating old data:", error);
-        toast({ title: "Migration Error", description: "Could not automatically migrate your old build data.", variant: "destructive" });
+        console.error("Error fetching build lists:", error);
+        toast({ title: "Error", description: "Could not fetch build lists.", variant: "destructive" });
       }
-    }
+      setIsLoading(false);
+    };
+
+    fetchBuildLists();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [toast]);
 
-  const handleCreateNewList = () => {
+  const handleCreateNewList = async () => {
     if (!newListName.trim()) {
       toast({ title: "Error", description: "List name cannot be empty.", variant: "destructive" });
       return;
     }
-    const newListData: BuildListData = {
-      version: APP_DATA_VERSION,
-      budget: { totalBudget: 1500, currencySymbol: "$" },
-      items: [],
-    };
-    const newList: BuildList = {
-      ...newListData,
-      id: crypto.randomUUID(),
-      name: newListName.trim(),
-      createdAt: new Date().toISOString(),
-    };
-    setAllBuilds(prev => ({ lists: [...prev.lists, newList] }));
-    setNewListName("");
-    setIsCreateDialogOpen(false);
-    toast({ title: "List Created", description: `"${newList.name}" has been created.` });
+    try {
+      const newListData = {
+        name: newListName.trim(),
+        createdAt: serverTimestamp(),
+        version: APP_DATA_VERSION,
+        budget: { totalBudget: 1500, currencySymbol: "$" },
+        userId: PLACEHOLDER_USER_ID,
+      };
+      const docRef = await addDoc(collection(db, "buildLists"), newListData);
+      
+      // Optimistically add to UI or refetch
+      const newUiList: BuildList = {
+        ...newListData,
+        id: docRef.id,
+        createdAt: new Date().toISOString(), // Approximate for UI until refetch or proper server timestamp handling
+        items: [] // New list has no items initially
+      };
+      setBuildLists(prev => [newUiList, ...prev]);
+
+      setNewListName("");
+      setIsCreateDialogOpen(false);
+      toast({ title: "List Created", description: `"${newListData.name}" has been created.` });
+    } catch (error) {
+      console.error("Error creating new list:", error);
+      toast({ title: "Error", description: "Could not create new list.", variant: "destructive" });
+    }
   };
 
-  const handleDeleteList = (listId: string) => {
-    const list = allBuilds.lists.find(l => l.id === listId);
-    if (list) {
-      setAllBuilds(prev => ({ lists: prev.lists.filter(l => l.id !== listId) }));
-      toast({ title: "List Deleted", description: `"${list.name}" has been deleted.`, variant: "destructive" });
+  const handleDeleteList = async (listId: string) => {
+    const list = buildLists.find(l => l.id === listId);
+    if (!list) return;
+
+    try {
+      // Note: Deleting subcollections in Firestore from the client-side is complex.
+      // For simplicity, this only deletes the main list document.
+      // In a production app, you'd use a Firebase Function to delete subcollections.
+      await deleteDoc(doc(db, "buildLists", listId));
+      setBuildLists(prev => prev.filter(l => l.id !== listId));
+      toast({ title: "List Deleted", description: `"${list.name}" has been deleted. Items within the list are not automatically deleted from the database.`, variant: "destructive" });
+    } catch (error) {
+      console.error("Error deleting list:", error);
+      toast({ title: "Error", description: "Could not delete list.", variant: "destructive" });
     }
     setListToDelete(null);
   };
@@ -157,24 +165,31 @@ export default function HomePage() {
     setIsEditListNameDialogOpen(true);
   };
 
-  const handleUpdateListName = () => {
+  const handleUpdateListName = async () => {
     if (!listToEditName || !editingListName.trim()) {
       toast({ title: "Error", description: "List name cannot be empty.", variant: "destructive" });
       return;
     }
-    setAllBuilds(prev => ({
-      ...prev,
-      lists: prev.lists.map(l =>
-        l.id === listToEditName.id ? { ...l, name: editingListName.trim() } : l
-      ),
-    }));
-    toast({ title: "List Updated", description: `List name changed to "${editingListName.trim()}".` });
-    setIsEditListNameDialogOpen(false);
-    setListToEditName(null);
-    setEditingListName("");
+    try {
+      const listRef = doc(db, "buildLists", listToEditName.id);
+      await updateDoc(listRef, { name: editingListName.trim() });
+      
+      setBuildLists(prev =>
+        prev.map(l =>
+          l.id === listToEditName.id ? { ...l, name: editingListName.trim() } : l
+        )
+      );
+      toast({ title: "List Updated", description: `List name changed to "${editingListName.trim()}".` });
+      setIsEditListNameDialogOpen(false);
+      setListToEditName(null);
+      setEditingListName("");
+    } catch (error) {
+      console.error("Error updating list name:", error);
+      toast({ title: "Error", description: "Could not update list name.", variant: "destructive" });
+    }
   };
   
-  if (!isClient) {
+  if (isLoading) {
      return (
         <div className="min-h-screen bg-background text-foreground flex flex-col items-center justify-center">
             <div className="flex items-center space-x-2">
@@ -199,9 +214,9 @@ export default function HomePage() {
           </Button>
         </div>
 
-        {allBuilds.lists.length > 0 ? (
+        {buildLists.length > 0 ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {allBuilds.lists.map(list => {
+            {buildLists.map(list => {
               const enrichedItems = list.items.map(item => enrichPurchaseItem(item));
               const totalPaidForList = enrichedItems.reduce((sum, item) => sum + item.paidAmount, 0);
               const totalRemainingForList = enrichedItems.reduce((sum, item) => sum + item.remainingBalance, 0);
@@ -235,7 +250,7 @@ export default function HomePage() {
                               <AlertDialogHeader>
                                 <AlertDialogTitle>Are you sure?</AlertDialogTitle>
                                 <AlertDialogDescription>
-                                  This action will permanently delete the build list "{listToDelete.name}" and all its items. This cannot be undone.
+                                  This action will permanently delete the build list "{listToDelete.name}". This cannot be undone, and items within the list may not be automatically deleted from the database by this action.
                                 </AlertDialogDescription>
                               </AlertDialogHeader>
                               <AlertDialogFooter>
@@ -320,4 +335,3 @@ export default function HomePage() {
     </div>
   );
 }
-

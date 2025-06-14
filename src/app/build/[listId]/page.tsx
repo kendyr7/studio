@@ -1,8 +1,8 @@
 
 "use client";
 
-import { useState, useEffect, useMemo, useCallback } from 'react';
-import { useRouter, useParams } from 'next/navigation'; // Import useRouter and useParams
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { useRouter, useParams } from 'next/navigation';
 import { Button } from "@/components/ui/button";
 import { PlusCircle, AlertTriangle, ArrowLeft } from "lucide-react";
 import { Header } from "@/components/layout/Header";
@@ -12,25 +12,40 @@ import { BudgetManager } from "@/components/buildmaster/BudgetManager";
 import { SummaryDashboard } from "@/components/buildmaster/SummaryDashboard";
 import { SortFilterControls } from "@/components/buildmaster/SortFilterControls";
 import { LogPaymentDialog } from "@/components/buildmaster/LogPaymentDialog";
-import useLocalStorage from "@/hooks/useLocalStorage";
-import type { AllBuilds, BuildList, StoredPurchaseItem, PurchaseItem as DisplayPurchaseItem, SortConfig, FilterStatus, SortableField, ItemStatus } from "@/types";
-import { APP_DATA_VERSION, LOCAL_STORAGE_KEY_ALL_BUILDS } from "@/lib/constants";
+import type { BuildList, StoredPurchaseItem, PurchaseItem as DisplayPurchaseItem, SortConfig, FilterStatus, SortableField, ItemStatus } from "@/types";
+import { APP_DATA_VERSION } from "@/lib/constants";
 import { enrichPurchaseItem } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent } from "@/components/ui/card";
 import Link from 'next/link';
+import { db } from '@/lib/firebaseConfig';
+import {
+  doc,
+  getDoc,
+  collection,
+  addDoc,
+  updateDoc,
+  deleteDoc,
+  getDocs,
+  writeBatch,
+  Timestamp,
+  serverTimestamp,
+  orderBy,
+  query,
+} from 'firebase/firestore';
 
-const initialAllBuilds: AllBuilds = { lists: [] };
+// Placeholder user ID. In a real app, this would come from Firebase Auth.
+const PLACEHOLDER_USER_ID = "default-user";
 
 export default function BuildListPage() {
   const router = useRouter();
   const params = useParams();
   const listId = params.listId as string;
 
-  const [allBuilds, setAllBuilds] = useLocalStorage<AllBuilds>(LOCAL_STORAGE_KEY_ALL_BUILDS, initialAllBuilds);
   const { toast } = useToast();
 
   const [currentList, setCurrentList] = useState<BuildList | undefined>(undefined);
+  const [isLoading, setIsLoading] = useState(true);
 
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<StoredPurchaseItem | undefined>(undefined);
@@ -42,121 +57,137 @@ export default function BuildListPage() {
   const [filterStatus, setFilterStatus] = useState<FilterStatus>('All');
   const [searchTerm, setSearchTerm] = useState<string>('');
   
-  const [isClient, setIsClient] = useState(false);
-
   useEffect(() => {
-    setIsClient(true);
-    const foundList = allBuilds.lists.find(l => l.id === listId);
-    if (foundList) {
-      if (foundList.version !== APP_DATA_VERSION) {
-        console.warn(`Data version mismatch for list "${foundList.name}". Expected ${APP_DATA_VERSION}, found ${foundList.version}. Consider migrating data.`);
-        // Potentially add more sophisticated migration logic here if versions differ significantly
-      }
-      // Item structure migration logic (similar to what was in the old page.tsx)
-      const migratedItems = foundList.items.map(item => {
-        const oldItem = item as any; 
-        let individualPayments = item.individualPayments;
-        let numberOfPayments = item.numberOfPayments ?? 1;
-
-        if (!individualPayments && typeof oldItem.paidAmount !== 'undefined') {
-          individualPayments = Array(numberOfPayments).fill(0);
-          if (oldItem.paymentsMade === 1 && numberOfPayments === 1 && oldItem.paidAmount > 0) {
-            individualPayments[0] = oldItem.paidAmount;
-          }
-        } else if (individualPayments && individualPayments.length !== numberOfPayments) {
-            const correctedPayments = Array(numberOfPayments).fill(0);
-            for(let i=0; i< Math.min(individualPayments.length, correctedPayments.length); i++) {
-                correctedPayments[i] = individualPayments[i];
-            }
-            individualPayments = correctedPayments;
-        } else if (!individualPayments) {
-            individualPayments = Array(numberOfPayments).fill(0);
-        }
-        
-        return {
-            ...item,
-            numberOfPayments,
-            individualPayments,
-            paidAmount: undefined, 
-            paymentsMade: undefined, 
-          } as StoredPurchaseItem;
-      });
-
-      if (JSON.stringify(foundList.items) !== JSON.stringify(migratedItems)) {
-         const updatedList = { ...foundList, items: migratedItems, version: APP_DATA_VERSION };
-         setCurrentList(updatedList);
-         setAllBuilds(prev => ({
-           ...prev,
-           lists: prev.lists.map(l => l.id === listId ? updatedList : l),
-         }));
-      } else {
-        setCurrentList(foundList);
-      }
-
-    } else if (allBuilds.lists.length > 0 && listId) { 
-      // If listId is present but not found, and other lists exist, redirect.
-      // This can happen if a list was deleted or URL is invalid.
-      // Check if listId is valid (not just any truthy string)
-      console.warn(`List with ID ${listId} not found. Redirecting to home.`);
+    if (!listId) {
       router.push('/');
+      return;
     }
+
+    const fetchListAndItems = async () => {
+      setIsLoading(true);
+      try {
+        const listDocRef = doc(db, "buildLists", listId);
+        const listDocSnap = await getDoc(listDocRef);
+
+        if (listDocSnap.exists()) {
+          const listData = listDocSnap.data();
+          if (listData.userId !== PLACEHOLDER_USER_ID) {
+            toast({ title: "Access Denied", description: "You do not have permission to view this list.", variant: "destructive" });
+            router.push('/');
+            return;
+          }
+
+          const itemsColRef = collection(db, "buildLists", listId, "items");
+          // Consider adding orderBy for items if needed, e.g., orderBy("name")
+          const itemsQuery = query(itemsColRef);
+          const itemsSnapshot = await getDocs(itemsQuery);
+          const items = itemsSnapshot.docs.map(itemDoc => ({ id: itemDoc.id, ...itemDoc.data() } as StoredPurchaseItem));
+          
+          // Basic data version check/migration placeholder
+          let listToSet: BuildList = {
+            id: listDocSnap.id,
+            name: listData.name,
+            createdAt: (listData.createdAt as Timestamp)?.toDate().toISOString() || new Date().toISOString(),
+            version: listData.version || APP_DATA_VERSION, // Default to current if not set
+            budget: listData.budget,
+            userId: listData.userId,
+            items: items,
+          };
+          
+          if (listToSet.version !== APP_DATA_VERSION) {
+            console.warn(`Data version mismatch for list "${listToSet.name}". Expected ${APP_DATA_VERSION}, found ${listToSet.version}. Consider implementing migration logic.`);
+            // Potentially update list version in Firestore if migration is performed
+             try {
+                await updateDoc(listDocRef, { version: APP_DATA_VERSION });
+                listToSet.version = APP_DATA_VERSION;
+             } catch (e) {
+                console.error("Failed to update list version in Firestore", e);
+             }
+          }
+          setCurrentList(listToSet);
+
+        } else {
+          toast({ title: "Not Found", description: "Build list not found.", variant: "destructive" });
+          router.push('/');
+        }
+      } catch (error) {
+        console.error("Error fetching build list:", error);
+        toast({ title: "Error", description: "Could not fetch build list data.", variant: "destructive" });
+        router.push('/');
+      }
+      setIsLoading(false);
+    };
+
+    fetchListAndItems();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [listId, allBuilds.lists, router]); // Removed setAllBuilds and toast from deps
+  }, [listId, router, toast]);
 
 
-  const updateCurrentList = useCallback((updater: (list: BuildList) => BuildList) => {
-    setCurrentList(prevList => {
-      if (!prevList) return undefined;
-      const updatedList = updater(prevList);
-      setAllBuilds(all => ({
-        ...all,
-        lists: all.lists.map(l => l.id === listId ? updatedList : l),
-      }));
-      return updatedList;
-    });
-  }, [listId, setAllBuilds]);
-
-
-  const handleAddItem = (data: PurchaseItemFormData) => {
+  const handleAddItem = async (data: PurchaseItemFormData) => {
     if (!currentList) return;
-    const newItem: StoredPurchaseItem = {
-      id: crypto.randomUUID(),
+    const newItemData: Omit<StoredPurchaseItem, 'id'> = {
       name: data.name,
       totalPrice: data.totalPrice,
       numberOfPayments: data.numberOfPayments,
-      individualPayments: data.individualPayments.map(p => p || 0),
+      individualPayments: Array(data.numberOfPayments).fill(0).map((_,i) => data.individualPayments[i] || 0),
       notes: data.notes,
       includeInSpendCalculation: data.includeInSpendCalculation,
+      // Firestore typically adds a server timestamp for creation if needed, or client can set.
     };
-    updateCurrentList(list => ({ ...list, items: [...list.items, newItem] }));
-    toast({ title: "Item Added", description: `${data.name} has been added to your list.` });
+    try {
+      const itemsColRef = collection(db, "buildLists", currentList.id, "items");
+      const docRef = await addDoc(itemsColRef, newItemData);
+      
+      const addedItemWithId: StoredPurchaseItem = { ...newItemData, id: docRef.id };
+      setCurrentList(prev => prev ? { ...prev, items: [...prev.items, addedItemWithId] } : undefined);
+      toast({ title: "Item Added", description: `${data.name} has been added.` });
+    } catch (error) {
+      console.error("Error adding item:", error);
+      toast({ title: "Error", description: "Could not add item.", variant: "destructive" });
+    }
   };
 
-  const handleEditItem = (data: PurchaseItemFormData) => {
+  const handleEditItem = async (data: PurchaseItemFormData) => {
     if (!editingItem || !currentList) return;
-    const updatedItem: StoredPurchaseItem = {
-      ...editingItem,
+    const itemDocRef = doc(db, "buildLists", currentList.id, "items", editingItem.id);
+    const updatedItemData: Omit<StoredPurchaseItem, 'id'> = {
       name: data.name,
       totalPrice: data.totalPrice,
       numberOfPayments: data.numberOfPayments,
-      individualPayments: data.individualPayments.map(p => p || 0),
+      individualPayments: Array(data.numberOfPayments).fill(0).map((_,i) => data.individualPayments[i] || 0),
       notes: data.notes,
       includeInSpendCalculation: data.includeInSpendCalculation,
     };
-    updateCurrentList(list => ({
-      ...list,
-      items: list.items.map(item => item.id === editingItem.id ? updatedItem : item),
-    }));
-    setEditingItem(undefined);
-    toast({ title: "Item Updated", description: `${data.name} has been updated.` });
+    try {
+      await updateDoc(itemDocRef, updatedItemData);
+      setCurrentList(prev => {
+        if (!prev) return undefined;
+        return {
+          ...prev,
+          items: prev.items.map(item => item.id === editingItem.id ? { ...updatedItemData, id: editingItem.id } : item),
+        };
+      });
+      setEditingItem(undefined);
+      toast({ title: "Item Updated", description: `${data.name} has been updated.` });
+    } catch (error) {
+      console.error("Error updating item:", error);
+      toast({ title: "Error", description: "Could not update item.", variant: "destructive" });
+    }
   };
 
-  const handleDeleteItem = (itemId: string) => {
+  const handleDeleteItem = async (itemId: string) => {
     if (!currentList) return;
     const itemToDelete = currentList.items.find(item => item.id === itemId);
-    updateCurrentList(list => ({ ...list, items: list.items.filter(item => item.id !== itemId) }));
-    if (itemToDelete) {
-        toast({ title: "Item Deleted", description: `${itemToDelete.name} has been removed.`, variant: "destructive" });
+    if (!itemToDelete) return;
+
+    const itemDocRef = doc(db, "buildLists", currentList.id, "items", itemId);
+    try {
+      await deleteDoc(itemDocRef);
+      setCurrentList(prev => prev ? { ...prev, items: prev.items.filter(item => item.id !== itemId) } : undefined);
+      toast({ title: "Item Deleted", description: `${itemToDelete.name} has been removed.`, variant: "destructive" });
+    } catch (error) {
+      console.error("Error deleting item:", error);
+      toast({ title: "Error", description: "Could not delete item.", variant: "destructive" });
     }
   };
 
@@ -170,25 +201,48 @@ export default function BuildListPage() {
     setIsFormOpen(true);
   };
   
-  const handleToggleIncludeInSpend = (itemId: string, include: boolean) => {
-    updateCurrentList(list => ({
-      ...list,
-      items: list.items.map(item =>
-        item.id === itemId ? { ...item, includeInSpendCalculation: include } : item
-      ),
-    }));
+  const handleToggleIncludeInSpend = async (itemId: string, include: boolean) => {
+     if (!currentList) return;
+    const itemDocRef = doc(db, "buildLists", currentList.id, "items", itemId);
+    try {
+        await updateDoc(itemDocRef, { includeInSpendCalculation: include });
+        setCurrentList(prev => {
+            if (!prev) return undefined;
+            return {
+                ...prev,
+                items: prev.items.map(item => item.id === itemId ? { ...item, includeInSpendCalculation: include } : item)
+            };
+        });
+    } catch (error) {
+        console.error("Error toggling include in spend:", error);
+        toast({ title: "Error", description: "Could not update item preference.", variant: "destructive" });
+    }
   };
 
-  const handleUpdateBudget = (newTotalBudget: number) => {
+  const handleUpdateBudget = async (newTotalBudget: number) => {
     if (!currentList) return;
-    updateCurrentList(list => ({ ...list, budget: { ...list.budget, totalBudget: newTotalBudget } }));
-    toast({ title: "Budget Updated", description: `Total budget set to ${currentList.budget.currencySymbol}${newTotalBudget.toFixed(2)}.` });
+    const listDocRef = doc(db, "buildLists", currentList.id);
+    try {
+      await updateDoc(listDocRef, { "budget.totalBudget": newTotalBudget });
+      setCurrentList(prev => prev ? { ...prev, budget: { ...prev.budget, totalBudget: newTotalBudget } } : undefined);
+      toast({ title: "Budget Updated", description: `Total budget set to ${currentList.budget.currencySymbol}${newTotalBudget.toFixed(2)}.` });
+    } catch (error) {
+      console.error("Error updating budget:", error);
+      toast({ title: "Error", description: "Could not update budget.", variant: "destructive" });
+    }
   };
 
-  const handleUpdateCurrency = (newCurrencySymbol: string) => {
+  const handleUpdateCurrency = async (newCurrencySymbol: string) => {
     if (!currentList) return;
-    updateCurrentList(list => ({ ...list, budget: { ...list.budget, currencySymbol: newCurrencySymbol } }));
-    toast({ title: "Currency Updated", description: `Currency symbol set to ${newCurrencySymbol}.` });
+    const listDocRef = doc(db, "buildLists", currentList.id);
+    try {
+      await updateDoc(listDocRef, { "budget.currencySymbol": newCurrencySymbol });
+      setCurrentList(prev => prev ? { ...prev, budget: { ...prev.budget, currencySymbol: newCurrencySymbol } } : undefined);
+      toast({ title: "Currency Updated", description: `Currency symbol set to ${newCurrencySymbol}.` });
+    } catch (error) {
+      console.error("Error updating currency:", error);
+      toast({ title: "Error", description: "Could not update currency.", variant: "destructive" });
+    }
   };
 
   const handleSortChange = (field: SortableField) => {
@@ -203,86 +257,60 @@ export default function BuildListPage() {
     setIsLogPaymentModalOpen(true);
   };
 
-  const handleLogPayment = useCallback((itemId: string, paymentAmount: number) => {
+  const handleLogPayment = useCallback(async (itemId: string, paymentAmount: number) => {
     if (!currentList) return;
-    updateCurrentList(list => {
-        const updatedItems = list.items.map(item => {
-            if (item.id === itemId) {
-              const newIndividualPayments = [...(item.individualPayments || Array(item.numberOfPayments || 1).fill(0))];
-              let paymentLogged = false;
-              for (let i = 0; i < newIndividualPayments.length; i++) {
-                if ((newIndividualPayments[i] === 0 || newIndividualPayments[i] === undefined) && !paymentLogged) {
-                  newIndividualPayments[i] = paymentAmount;
-                  paymentLogged = true;
-                  break; 
-                }
-              }
-              
-              if (paymentLogged) {
-                let currentTotalPaid = newIndividualPayments.reduce((sum, p) => sum + (p || 0), 0);
-                if (currentTotalPaid > item.totalPrice) {
-                    const overPayment = currentTotalPaid - item.totalPrice;
-                    // Find the index of the payment we just logged
-                    const lastLoggedPaymentIndex = newIndividualPayments.findIndex((p, idx, arr) => {
-                        if (p === paymentAmount) {
-                            // Check if this is the first occurrence of paymentAmount from the end, essentially finding the last one added.
-                            // This logic is a bit naive if multiple payments of the exact same amount are made.
-                            // A more robust way would be to track the specific index being paid.
-                            // For now, this assumes the paymentAmount is unique or we adjust the latest.
-                            let count = 0;
-                            for (let k=idx; k<arr.length; k++) if(arr[k] === paymentAmount) count++;
-                            return count === 1; 
-                        }
-                        return false;
-                    });
+    const itemToUpdate = currentList.items.find(item => item.id === itemId);
+    if (!itemToUpdate) return;
 
-
-                     if (lastLoggedPaymentIndex !== -1) {
-                        newIndividualPayments[lastLoggedPaymentIndex] = Math.max(0, paymentAmount - overPayment);
-                     } else {
-                        // Fallback: if we can't find the exact payment to adjust, adjust the last non-zero payment.
-                        for (let i = newIndividualPayments.length - 1; i >=0; i--) {
-                            if (newIndividualPayments[i] > 0) {
-                                newIndividualPayments[i] = Math.max(0, newIndividualPayments[i] - overPayment);
-                                break;
-                            }
-                        }
-                     }
-                }
-                return { 
-                  ...item, 
-                  individualPayments: newIndividualPayments
-                };
-              }
-            }
-            return item;
-          });
-        return { ...list, items: updatedItems };
-    });
-    const itemData = currentList.items.find(i => i.id === itemId);
-    if (itemData) {
-      toast({ title: "Payment Logged", description: `Payment of ${currentList.budget.currencySymbol}${paymentAmount.toFixed(2)} logged for ${itemData.name}.` });
+    const itemDocRef = doc(db, "buildLists", currentList.id, "items", itemId);
+    
+    const newIndividualPayments = [...(itemToUpdate.individualPayments || Array(itemToUpdate.numberOfPayments || 1).fill(0))];
+    let paymentLogged = false;
+    for (let i = 0; i < newIndividualPayments.length; i++) {
+      if ((newIndividualPayments[i] === 0 || newIndividualPayments[i] === undefined) && !paymentLogged) {
+        newIndividualPayments[i] = paymentAmount;
+        paymentLogged = true;
+        break; 
+      }
     }
-    setIsLogPaymentModalOpen(false);
-  }, [currentList, updateCurrentList, toast]);
+
+    if (!paymentLogged) {
+        toast({ title: "Error", description: "No available payment slot to log this amount.", variant: "destructive" });
+        return;
+    }
+    
+    // Ensure total paid doesn't exceed total price due to this payment
+    let currentTotalPaid = newIndividualPayments.reduce((sum, p) => sum + (p || 0), 0);
+    if (currentTotalPaid > itemToUpdate.totalPrice) {
+        const overPayment = currentTotalPaid - itemToUpdate.totalPrice;
+        // Find the index of the payment we just logged and adjust it
+        const lastLoggedPaymentIndex = newIndividualPayments.lastIndexOf(paymentAmount); // simple way, assumes unique or last
+        if (lastLoggedPaymentIndex !== -1) {
+            newIndividualPayments[lastLoggedPaymentIndex] = Math.max(0, paymentAmount - overPayment);
+        }
+    }
+
+    try {
+        await updateDoc(itemDocRef, { individualPayments: newIndividualPayments });
+        setCurrentList(prev => {
+            if (!prev) return undefined;
+            return {
+                ...prev,
+                items: prev.items.map(item => item.id === itemId ? { ...item, individualPayments: newIndividualPayments } : item)
+            };
+        });
+        toast({ title: "Payment Logged", description: `Payment of ${currentList.budget.currencySymbol}${paymentAmount.toFixed(2)} logged for ${itemToUpdate.name}.` });
+        setIsLogPaymentModalOpen(false);
+    } catch (error) {
+        console.error("Error logging payment:", error);
+        toast({ title: "Error", description: "Could not log payment.", variant: "destructive" });
+    }
+  }, [currentList, toast]);
 
 
   const displayItems: DisplayPurchaseItem[] = useMemo(() => {
     if (!currentList) return [];
-    let items = currentList.items.map(item => {
-      const storedItemWithDefaults: StoredPurchaseItem = {
-        id: item.id,
-        name: item.name,
-        totalPrice: item.totalPrice ?? 0,
-        notes: item.notes,
-        numberOfPayments: item.numberOfPayments ?? 1,
-        individualPayments: item.individualPayments && item.individualPayments.length > 0 
-            ? item.individualPayments 
-            : Array(item.numberOfPayments || 1).fill(0),
-        includeInSpendCalculation: item.includeInSpendCalculation ?? true,
-      };
-      return enrichPurchaseItem(storedItemWithDefaults);
-    });
+    let items = currentList.items.map(item => enrichPurchaseItem(item));
 
     if (filterStatus !== 'All') {
       items = items.filter(item => item.status === filterStatus);
@@ -321,7 +349,7 @@ export default function BuildListPage() {
   }, [currentList, filterStatus, sortConfig, searchTerm]);
 
 
-  if (!isClient || !currentList) {
+  if (isLoading || !currentList) {
     return (
         <div className="min-h-screen bg-background text-foreground flex flex-col items-center justify-center">
             <div className="flex items-center space-x-2">
@@ -414,13 +442,15 @@ export default function BuildListPage() {
           initialData={editingItem}
           currencySymbol={currentList.budget.currencySymbol}
         />
-        <LogPaymentDialog
-          isOpen={isLogPaymentModalOpen}
-          onOpenChange={setIsLogPaymentModalOpen}
-          itemBeingPaid={itemToLogPaymentFor}
-          currencySymbol={currentList.budget.currencySymbol}
-          onSubmitLogPayment={handleLogPayment}
-        />
+        {itemToLogPaymentFor && (
+          <LogPaymentDialog
+            isOpen={isLogPaymentModalOpen}
+            onOpenChange={setIsLogPaymentModalOpen}
+            itemBeingPaid={itemToLogPaymentFor}
+            currencySymbol={currentList.budget.currencySymbol}
+            onSubmitLogPayment={handleLogPayment}
+          />
+        )}
       </main>
       <footer className="text-center py-6 border-t border-border text-sm text-muted-foreground">
         BuildMaster &copy; {new Date().getFullYear()} - Your Gaming PC Purchase Tracker
@@ -428,4 +458,3 @@ export default function BuildListPage() {
     </div>
   );
 }
-
