@@ -8,16 +8,16 @@ body {
 
 @layer base {
   :root {
-    --background: 278 5% 17%; /* Dark Gray #2B282F */
-    --foreground: 0 0% 98%; /* Light text */
+    --background: 278 5% 17%; /* BuildMaster Dark: Dark Gray #2B282F */
+    --foreground: 0 0% 98%; /* BuildMaster Dark: Light text */
 
-    --card: 278 5% 22%; /* Slightly lighter than background */
+    --card: 278 5% 22%; /* BuildMaster Dark: Slightly lighter than background */
     --card-foreground: 0 0% 98%;
 
     --popover: 278 5% 15%;
     --popover-foreground: 0 0% 98%;
 
-    --primary: 290 69% 51%; /* Electric Purple #BE2ED6 */
+    --primary: 290 69% 51%; /* BuildMaster Dark: Electric Purple #BE2ED6 */
     --primary-foreground: 0 0% 98%;
 
     --secondary: 278 5% 25%;
@@ -26,15 +26,15 @@ body {
     --muted: 278 5% 30%;
     --muted-foreground: 0 0% 60%;
 
-    --accent: 176 63% 51%; /* Teal #30D5C8 */
-    --accent-foreground: 278 5% 10%; /* Dark text on Teal */
+    --accent: 176 63% 51%; /* BuildMaster Dark: Teal #30D5C8 */
+    --accent-foreground: 278 5% 10%; /* BuildMaster Dark: Dark text on Teal */
 
     --destructive: 0 72% 51%;
     --destructive-foreground: 0 0% 98%;
 
-    --border: 278 5% 28%; /* Adjusted for dark theme */
-    --input: 278 5% 24%;  /* Adjusted for dark theme */
-    --ring: 290 69% 51%;   /* Primary color for rings */
+    --border: 278 5% 28%; /* BuildMaster Dark: Adjusted for dark theme */
+    --input: 278 5% 24%;  /* BuildMaster Dark: Adjusted for dark theme */
+    --ring: 290 69% 51%;   /* BuildMaster Dark: Primary color for rings */
     
     --chart-1: 290 69% 51%; /* Primary */
     --chart-2: 176 63% 51%; /* Accent */
@@ -96,6 +96,84 @@ body {
     --sidebar-accent: 176 63% 51%;
     --sidebar-accent-foreground: 278 5% 10%;
     --sidebar-border: 278 5% 25%;
+    --sidebar-ring: 290 69% 51%;
+  }
+
+  .theme-obsidian-dark {
+    --background: 240 10% 4%; 
+    --foreground: 0 0% 95%; 
+    --card: 240 10% 8%; 
+    --card-foreground: 0 0% 95%;
+    --popover: 240 10% 3%;
+    --popover-foreground: 0 0% 95%;
+    --primary: 290 69% 51%; 
+    --primary-foreground: 0 0% 98%;
+    --secondary: 240 10% 10%;
+    --secondary-foreground: 0 0% 95%;
+    --muted: 240 10% 15%;
+    --muted-foreground: 0 0% 55%;
+    --accent: 176 63% 51%; 
+    --accent-foreground: 240 10% 5%; 
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 240 10% 12%;
+    --input: 240 10% 10%;
+    --ring: 290 69% 51%;
+
+    --chart-1: 290 69% 51%;
+    --chart-2: 176 63% 51%;
+    --chart-3: 240 10% 25%;
+    --chart-4: 0 0% 55%;
+    --chart-5: 0 72% 51%;
+    
+    --radius: 0.5rem;
+
+    --sidebar-background: 240 10% 6%;
+    --sidebar-foreground: 0 0% 90%;
+    --sidebar-primary: 290 69% 51%;
+    --sidebar-primary-foreground: 0 0% 98%;
+    --sidebar-accent: 176 63% 51%;
+    --sidebar-accent-foreground: 240 10% 5%;
+    --sidebar-border: 240 10% 10%;
+    --sidebar-ring: 290 69% 51%;
+  }
+
+  .theme-arctic-light {
+    --background: 0 0% 100%;
+    --foreground: 240 10% 3.9%;
+    --card: 0 0% 97%;
+    --card-foreground: 240 10% 3.9%;
+    --popover: 0 0% 99%;
+    --popover-foreground: 240 10% 3.9%;
+    --primary: 290 69% 51%;
+    --primary-foreground: 0 0% 10%; 
+    --secondary: 240 5% 90%;
+    --secondary-foreground: 240 10% 10%;
+    --muted: 240 5% 93%;
+    --muted-foreground: 240 5% 45%;
+    --accent: 176 63% 51%;
+    --accent-foreground: 0 0% 10%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 240 5% 85%;
+    --input: 240 5% 90%;
+    --ring: 290 69% 51%;
+
+    --chart-1: 290 69% 51%;
+    --chart-2: 176 63% 51%;
+    --chart-3: 240 5% 75%;
+    --chart-4: 240 5% 45%;
+    --chart-5: 0 84.2% 60.2%;
+
+    --radius: 0.5rem;
+
+    --sidebar-background: 0 0% 96%;
+    --sidebar-foreground: 240 10% 10%;
+    --sidebar-primary: 290 69% 51%;
+    --sidebar-primary-foreground: 0 0% 10%;
+    --sidebar-accent: 176 63% 51%;
+    --sidebar-accent-foreground: 0 0% 10%;
+    --sidebar-border: 240 5% 80%;
     --sidebar-ring: 290 69% 51%;
   }
 }
