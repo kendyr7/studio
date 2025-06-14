@@ -12,7 +12,7 @@ import { Checkbox } from '../ui/checkbox';
 
 interface PurchaseItemCardProps {
   item: PurchaseItem;
-  onEdit: (itemStored: PurchaseItem) => void; // Technically StoredPurchaseItem from appData, but PurchaseItem is safer for card use
+  onEdit: (itemStored: PurchaseItem) => void; 
   onDelete: (itemId: string) => void;
   onToggleIncludeInSpend: (itemId: string, include: boolean) => void;
   onOpenLogPaymentModal: (item: PurchaseItem) => void;
@@ -27,12 +27,14 @@ export function PurchaseItemCard({
     onOpenLogPaymentModal,
     currencySymbol = "$" 
 }: PurchaseItemCardProps) {
-  const progressPercentage = item.totalPrice > 0 ? (item.paidAmount / item.totalPrice) * 100 : (item.paidAmount > 0 ? 100 : 0);
+  const monetaryProgressPercentage = item.totalPrice > 0 ? (item.paidAmount / item.totalPrice) * 100 : (item.paidAmount > 0 ? 100 : 0);
   
   const canLogPayment = item.paymentsMade < item.numberOfPayments && item.paidAmount < item.totalPrice;
   
   const paymentsMadeCount = item.paymentsMade ?? 0;
-  const numberOfPaymentsCount = item.numberOfPayments ?? 1;
+  const numberOfPaymentsCount = item.numberOfPayments ?? 1; // Ensure it's at least 1
+
+  const paymentsLoggedProgressPercentage = numberOfPaymentsCount > 0 ? (paymentsMadeCount / numberOfPaymentsCount) * 100 : 0;
 
   const logPaymentButtonText = () => {
     if (numberOfPaymentsCount > 1) {
@@ -59,22 +61,27 @@ export function PurchaseItemCard({
             <span>Overall Progress</span>
             <span>{formatCurrency(item.remainingBalance, currencySymbol)} remaining</span>
           </div>
-          <Progress value={progressPercentage} aria-label={`${item.name} payment progress`} className="h-2 [&>div]:bg-primary" />
+          <Progress value={monetaryProgressPercentage} aria-label={`${item.name} payment progress`} className="h-2 [&>div]:bg-primary" />
         </div>
         
         {numberOfPaymentsCount > 1 && (
-          <div className="mt-2">
-            <div className="flex items-center text-xs text-muted-foreground mb-1">
+          <div className="mt-2 space-y-1.5">
+            <div className="flex items-center text-xs text-muted-foreground">
               <ListChecks className="h-3.5 w-3.5 mr-1.5 shrink-0" />
               Payments Logged: {paymentsMadeCount} / {numberOfPaymentsCount}
             </div>
+             <Progress 
+                value={paymentsLoggedProgressPercentage} 
+                aria-label="Payments logged progress" 
+                className="h-2 [&>div]:bg-destructive" 
+            />
           </div>
         )}
 
         {item.notes && (
           <div className="flex items-start text-xs text-muted-foreground pt-1">
             <StickyNote className="h-3.5 w-3.5 mr-1.5 mt-0.5 shrink-0" />
-            <p className="truncate-3-lines">{item.notes}</p> {/* Apply a class to truncate after 3 lines */}
+            <p className="truncate-3-lines">{item.notes}</p>
           </div>
         )}
 
@@ -116,4 +123,3 @@ export function PurchaseItemCard({
     </Card>
   );
 }
-

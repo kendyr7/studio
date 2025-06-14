@@ -16,7 +16,7 @@ import type { StoredPurchaseItem, PurchaseItem as DisplayPurchaseItem, BudgetDat
 import { APP_DATA_VERSION, LOCAL_STORAGE_KEY } from "@/lib/constants";
 import { enrichPurchaseItem } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card"; // Ensure Card and CardContent are imported
 
 const initialAppData: AppData = {
   version: APP_DATA_VERSION,
@@ -49,9 +49,7 @@ export default function BuildMasterPage() {
   const handleAddItem = (data: PurchaseItemFormData) => {
     const newItem: StoredPurchaseItem = {
       id: crypto.randomUUID(),
-      ...data,
-      paymentsMade: data.paidAmount > 0 && data.numberOfPayments === 1 && data.paidAmount === data.totalPrice ? 1 : 0, // If fully paid in one go, mark 1 payment made
-      numberOfPayments: data.numberOfPayments, // Already defaults to 1 in form
+      ...data, // Includes name, totalPrice, paidAmount, numberOfPayments, paymentsMade, notes, includeInSpendCalculation
     };
     setAppData(prev => ({ ...prev, items: [...prev.items, newItem] }));
     toast({ title: "Item Added", description: `${data.name} has been added to your list.` });
@@ -61,9 +59,7 @@ export default function BuildMasterPage() {
     if (!editingItem) return;
     const updatedItem: StoredPurchaseItem = {
       ...editingItem,
-      ...data,
-      // if paidAmount is 0, reset paymentsMade. Otherwise, cap paymentsMade by new numberOfPayments.
-      paymentsMade: data.paidAmount === 0 ? 0 : Math.min(editingItem.paymentsMade ?? 0, data.numberOfPayments),
+      ...data, // This will overwrite all fields from the form, including paymentsMade
     };
     setAppData(prev => ({
       ...prev,
@@ -126,17 +122,16 @@ export default function BuildMasterPage() {
     setAppData(prev => {
       const updatedItems = prev.items.map(item => {
         if (item.id === itemId) {
-          // Ensure paymentsMade and numberOfPayments are numbers
           const currentPaymentsMade = item.paymentsMade ?? 0;
           const totalNumberOfPayments = item.numberOfPayments ?? 1;
 
           if (currentPaymentsMade < totalNumberOfPayments && item.paidAmount < item.totalPrice) {
-            const newPaymentsMade = currentPaymentsMade + 1;
             let newPaidAmount = Math.min(item.totalPrice, (item.paidAmount ?? 0) + paymentAmount);
+            const newPaymentsMade = currentPaymentsMade + 1;
 
             // If this payment makes it fully paid or it's the last designated payment
             if (newPaidAmount >= item.totalPrice || newPaymentsMade === totalNumberOfPayments) {
-              newPaidAmount = item.totalPrice; // Ensure it's exactly total price
+              newPaidAmount = item.totalPrice; // Ensure it's exactly total price if it's the last or goes over
             }
             
             return { 

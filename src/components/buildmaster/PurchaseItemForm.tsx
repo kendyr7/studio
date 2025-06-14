@@ -35,12 +35,23 @@ const purchaseItemSchema = z.object({
   totalPrice: z.coerce.number().min(0, { message: "Total price must be non-negative." }),
   paidAmount: z.coerce.number().min(0, { message: "Paid amount must be non-negative." }),
   numberOfPayments: z.coerce.number().int().min(1, { message: "Number of payments must be at least 1."}).default(1),
+  paymentsMade: z.coerce.number().int().min(0, { message: "Payments made must be non-negative." }).default(0),
   notes: z.string().max(500).optional(),
   includeInSpendCalculation: z.boolean().default(true),
-}).refine(data => data.paidAmount <= data.totalPrice, {
+})
+.refine(data => data.paidAmount <= data.totalPrice, {
   message: "Paid amount cannot exceed total price.",
   path: ["paidAmount"],
+})
+.refine(data => data.paymentsMade <= data.numberOfPayments, {
+  message: "Payments made cannot exceed Number of Payments.",
+  path: ["paymentsMade"],
+})
+.refine(data => data.paidAmount > 0 || data.paymentsMade === 0, {
+  message: "If Paid Amount is 0, Payments Made must also be 0. Or, if Payments Made > 0, Paid Amount must be > 0.",
+  path: ["paymentsMade"], 
 });
+
 
 export type PurchaseItemFormData = z.infer<typeof purchaseItemSchema>;
 
@@ -60,12 +71,13 @@ export function PurchaseItemForm({
   currencySymbol = "$",
 }: PurchaseItemFormProps) {
 
-  const getSafeFormValues = React.useCallback((data?: StoredPurchaseItem) => {
-    const defaults = {
+  const getSafeFormValues = React.useCallback((data?: StoredPurchaseItem): PurchaseItemFormData => {
+    const defaults: PurchaseItemFormData = {
       name: "",
       totalPrice: 0,
       paidAmount: 0,
-      numberOfPayments: 1, // Default to 1
+      numberOfPayments: 1,
+      paymentsMade: 0,
       notes: "",
       includeInSpendCalculation: true,
     };
@@ -75,10 +87,10 @@ export function PurchaseItemForm({
         name: data.name || defaults.name,
         totalPrice: data.totalPrice ?? defaults.totalPrice,
         paidAmount: data.paidAmount ?? defaults.paidAmount,
-        // Ensure numberOfPayments is at least 1, or use default if not present
         numberOfPayments: (data.numberOfPayments !== undefined && data.numberOfPayments !== null && data.numberOfPayments >= 1)
                           ? data.numberOfPayments
                           : defaults.numberOfPayments,
+        paymentsMade: data.paymentsMade ?? defaults.paymentsMade,
         notes: data.notes || defaults.notes,
         includeInSpendCalculation: data.includeInSpendCalculation ?? defaults.includeInSpendCalculation,
       };
@@ -160,19 +172,34 @@ export function PurchaseItemForm({
                 )}
               />
             </div>
-            <FormField
-              control={form.control}
-              name="numberOfPayments"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Number of Payments</FormLabel>
-                  <FormControl>
-                    <Input type="number" step="1" min="1" placeholder="e.g., 3" {...field} />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
+            <div className="grid grid-cols-2 gap-4">
+              <FormField
+                control={form.control}
+                name="numberOfPayments"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Number of Payments</FormLabel>
+                    <FormControl>
+                      <Input type="number" step="1" min="1" placeholder="e.g., 3" {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name="paymentsMade"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Payments Made</FormLabel>
+                    <FormControl>
+                      <Input type="number" step="1" min="0" placeholder="e.g., 1" {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            </div>
             <FormField
               control={form.control}
               name="notes"
