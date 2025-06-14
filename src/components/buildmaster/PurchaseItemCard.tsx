@@ -17,6 +17,7 @@ interface PurchaseItemCardProps {
   onToggleIncludeInSpend: (itemId: string, include: boolean) => void;
   onOpenLogPaymentModal: (item: PurchaseItem) => void;
   currencySymbol?: string;
+  disabled?: boolean;
 }
 
 export function PurchaseItemCard({ 
@@ -25,7 +26,8 @@ export function PurchaseItemCard({
     onDelete, 
     onToggleIncludeInSpend, 
     onOpenLogPaymentModal,
-    currencySymbol = "$" 
+    currencySymbol = "$",
+    disabled = false,
 }: PurchaseItemCardProps) {
   const monetaryProgressPercentage = item.totalPrice > 0 ? (item.paidAmount / item.totalPrice) * 100 : (item.paidAmount > 0 ? 100 : 0);
   
@@ -45,7 +47,7 @@ export function PurchaseItemCard({
   };
 
   return (
-    <Card className="flex flex-col h-full shadow-lg hover:shadow-primary/30 transition-shadow duration-300 ease-in-out">
+    <Card className={`flex flex-col h-full shadow-lg hover:shadow-primary/30 transition-shadow duration-300 ease-in-out ${disabled ? 'opacity-70 pointer-events-none' : ''}`}>
       <CardHeader className="pb-3">
         <div className="flex justify-between items-start">
           <CardTitle className="font-headline text-xl mb-1">{item.name}</CardTitle>
@@ -81,7 +83,7 @@ export function PurchaseItemCard({
         {item.notes && (
           <div className="flex items-start text-xs text-muted-foreground pt-1">
             <StickyNote className="h-3.5 w-3.5 mr-1.5 mt-0.5 shrink-0" />
-            <p className="truncate-3-lines">{item.notes}</p>
+            <p className="truncate-3-lines">{item.notes}</p> {/* Consider expanding this or tooltip for full notes */}
           </div>
         )}
 
@@ -94,16 +96,17 @@ export function PurchaseItemCard({
                     checked={item.includeInSpendCalculation}
                     onCheckedChange={(checked) => onToggleIncludeInSpend(item.id, !!checked)}
                     aria-labelledby={`include-label-${item.id}`}
+                    disabled={disabled}
                 />
                 <label htmlFor={`include-${item.id}`} id={`include-label-${item.id}`} className="text-muted-foreground cursor-pointer hover:text-foreground transition-colors">
                     Count in total
                 </label>
             </div>
             <div className="flex gap-2">
-                <Button variant="outline" size="sm" onClick={() => onEdit(item)} aria-label={`Edit ${item.name}`}>
+                <Button variant="outline" size="sm" onClick={() => onEdit(item)} aria-label={`Edit ${item.name}`} disabled={disabled}>
                     <Edit2 className="h-3.5 w-3.5" />
                 </Button>
-                <Button variant="destructive" size="sm" onClick={() => onDelete(item.id)} aria-label={`Delete ${item.name}`}>
+                <Button variant="destructive" size="sm" onClick={() => onDelete(item.id)} aria-label={`Delete ${item.name}`} disabled={disabled}>
                     <Trash2 className="h-3.5 w-3.5" />
                 </Button>
             </div>
@@ -113,7 +116,7 @@ export function PurchaseItemCard({
             variant="default"
             size="sm"
             onClick={() => onOpenLogPaymentModal(item)}
-            disabled={!canLogPayment}
+            disabled={!canLogPayment || disabled}
             className="w-full bg-accent hover:bg-accent/90 text-accent-foreground"
         >
             <CreditCard className="mr-2 h-4 w-4" />

@@ -27,9 +27,9 @@ import {
   updateDoc,
   deleteDoc,
   getDocs,
-  writeBatch,
+  // writeBatch, // Not used currently
   Timestamp,
-  serverTimestamp,
+  // serverTimestamp, // Not used for item creation timestamp, relies on list's serverTimestamp
   orderBy,
   query,
 } from 'firebase/firestore';
@@ -46,6 +46,7 @@ export default function BuildListPage() {
 
   const [currentList, setCurrentList] = useState<BuildList | undefined>(undefined);
   const [isLoading, setIsLoading] = useState(true);
+  const [isOperating, setIsOperating] = useState(false); // For individual operations
 
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<StoredPurchaseItem | undefined>(undefined);
@@ -59,6 +60,7 @@ export default function BuildListPage() {
   
   useEffect(() => {
     if (!listId) {
+      toast({ title: "Invalid List ID", description: "No list ID provided.", variant: "destructive" });
       router.push('/');
       return;
     }
@@ -71,37 +73,35 @@ export default function BuildListPage() {
 
         if (listDocSnap.exists()) {
           const listData = listDocSnap.data();
-          if (listData.userId !== PLACEHOLDER_USER_ID) {
+          if (listData.userId !== PLACEHOLDER_USER_ID) { // Basic security check
             toast({ title: "Access Denied", description: "You do not have permission to view this list.", variant: "destructive" });
             router.push('/');
             return;
           }
 
           const itemsColRef = collection(db, "buildLists", listId, "items");
-          // Consider adding orderBy for items if needed, e.g., orderBy("name")
-          const itemsQuery = query(itemsColRef);
+          const itemsQuery = query(itemsColRef, orderBy("name")); // Default sort by name, can be adjusted
           const itemsSnapshot = await getDocs(itemsQuery);
           const items = itemsSnapshot.docs.map(itemDoc => ({ id: itemDoc.id, ...itemDoc.data() } as StoredPurchaseItem));
           
-          // Basic data version check/migration placeholder
           let listToSet: BuildList = {
             id: listDocSnap.id,
             name: listData.name,
             createdAt: (listData.createdAt as Timestamp)?.toDate().toISOString() || new Date().toISOString(),
-            version: listData.version || APP_DATA_VERSION, // Default to current if not set
-            budget: listData.budget,
+            version: listData.version || APP_DATA_VERSION,
+            budget: listData.budget || { totalBudget: 0, currencySymbol: "$" },
             userId: listData.userId,
             items: items,
           };
           
           if (listToSet.version !== APP_DATA_VERSION) {
-            console.warn(`Data version mismatch for list "${listToSet.name}". Expected ${APP_DATA_VERSION}, found ${listToSet.version}. Consider implementing migration logic.`);
-            // Potentially update list version in Firestore if migration is performed
+            console.warn(`Data version mismatch for list "${listToSet.name}". Expected ${APP_DATA_VERSION}, found ${listToSet.version}. Consider migration.`);
              try {
                 await updateDoc(listDocRef, { version: APP_DATA_VERSION });
                 listToSet.version = APP_DATA_VERSION;
              } catch (e) {
                 console.error("Failed to update list version in Firestore", e);
+                // Non-critical, proceed with loaded data
              }
           }
           setCurrentList(listToSet);
@@ -112,7 +112,11 @@ export default function BuildListPage() {
         }
       } catch (error) {
         console.error("Error fetching build list:", error);
-        toast({ title: "Error", description: "Could not fetch build list data.", variant: "destructive" });
+        toast({ 
+            title: "Error Fetching List", 
+            description: `Could not fetch build list data. ${error instanceof Error ? error.message : String(error)}`, 
+            variant: "destructive" 
+        });
         router.push('/');
       }
       setIsLoading(false);
@@ -120,42 +124,48 @@ export default function BuildListPage() {
 
     fetchListAndItems();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [listId, router, toast]);
+  }, [listId, router]); // toast removed as it's stable
 
 
   const handleAddItem = async (data: PurchaseItemFormData) => {
     if (!currentList) return;
+    setIsOperating(true);
     const newItemData: Omit<StoredPurchaseItem, 'id'> = {
       name: data.name,
       totalPrice: data.totalPrice,
       numberOfPayments: data.numberOfPayments,
       individualPayments: Array(data.numberOfPayments).fill(0).map((_,i) => data.individualPayments[i] || 0),
-      notes: data.notes,
+      notes: data.notes || "",
       includeInSpendCalculation: data.includeInSpendCalculation,
-      // Firestore typically adds a server timestamp for creation if needed, or client can set.
     };
     try {
       const itemsColRef = collection(db, "buildLists", currentList.id, "items");
       const docRef = await addDoc(itemsColRef, newItemData);
       
       const addedItemWithId: StoredPurchaseItem = { ...newItemData, id: docRef.id };
-      setCurrentList(prev => prev ? { ...prev, items: [...prev.items, addedItemWithId] } : undefined);
+      setCurrentList(prev => prev ? { ...prev, items: [...prev.items, addedItemWithId].sort((a,b) => a.name.localeCompare(b.name)) } : undefined);
       toast({ title: "Item Added", description: `${data.name} has been added.` });
     } catch (error) {
       console.error("Error adding item:", error);
-      toast({ title: "Error", description: "Could not add item.", variant: "destructive" });
+      toast({ 
+        title: "Error Adding Item", 
+        description: `Could not add item. ${error instanceof Error ? error.message : String(error)}`, 
+        variant: "destructive" 
+      });
     }
+    setIsOperating(false);
   };
 
   const handleEditItem = async (data: PurchaseItemFormData) => {
     if (!editingItem || !currentList) return;
+    setIsOperating(true);
     const itemDocRef = doc(db, "buildLists", currentList.id, "items", editingItem.id);
     const updatedItemData: Omit<StoredPurchaseItem, 'id'> = {
       name: data.name,
       totalPrice: data.totalPrice,
       numberOfPayments: data.numberOfPayments,
       individualPayments: Array(data.numberOfPayments).fill(0).map((_,i) => data.individualPayments[i] || 0),
-      notes: data.notes,
+      notes: data.notes || "",
       includeInSpendCalculation: data.includeInSpendCalculation,
     };
     try {
@@ -164,22 +174,29 @@ export default function BuildListPage() {
         if (!prev) return undefined;
         return {
           ...prev,
-          items: prev.items.map(item => item.id === editingItem.id ? { ...updatedItemData, id: editingItem.id } : item),
+          items: prev.items.map(item => item.id === editingItem.id ? { ...updatedItemData, id: editingItem.id } : item)
+                           .sort((a,b) => a.name.localeCompare(b.name)),
         };
       });
       setEditingItem(undefined);
       toast({ title: "Item Updated", description: `${data.name} has been updated.` });
     } catch (error) {
       console.error("Error updating item:", error);
-      toast({ title: "Error", description: "Could not update item.", variant: "destructive" });
+      toast({ 
+        title: "Error Updating Item", 
+        description: `Could not update item. ${error instanceof Error ? error.message : String(error)}`, 
+        variant: "destructive" 
+      });
     }
+    setIsOperating(false);
   };
 
   const handleDeleteItem = async (itemId: string) => {
     if (!currentList) return;
     const itemToDelete = currentList.items.find(item => item.id === itemId);
     if (!itemToDelete) return;
-
+    
+    setIsOperating(true);
     const itemDocRef = doc(db, "buildLists", currentList.id, "items", itemId);
     try {
       await deleteDoc(itemDocRef);
@@ -187,8 +204,13 @@ export default function BuildListPage() {
       toast({ title: "Item Deleted", description: `${itemToDelete.name} has been removed.`, variant: "destructive" });
     } catch (error) {
       console.error("Error deleting item:", error);
-      toast({ title: "Error", description: "Could not delete item.", variant: "destructive" });
+      toast({ 
+        title: "Error Deleting Item", 
+        description: `Could not delete item. ${error instanceof Error ? error.message : String(error)}`, 
+        variant: "destructive" 
+      });
     }
+    setIsOperating(false);
   };
 
   const openEditForm = (item: StoredPurchaseItem) => {
@@ -203,6 +225,7 @@ export default function BuildListPage() {
   
   const handleToggleIncludeInSpend = async (itemId: string, include: boolean) => {
      if (!currentList) return;
+    setIsOperating(true);
     const itemDocRef = doc(db, "buildLists", currentList.id, "items", itemId);
     try {
         await updateDoc(itemDocRef, { includeInSpendCalculation: include });
@@ -215,12 +238,18 @@ export default function BuildListPage() {
         });
     } catch (error) {
         console.error("Error toggling include in spend:", error);
-        toast({ title: "Error", description: "Could not update item preference.", variant: "destructive" });
+        toast({ 
+            title: "Error Updating Preference", 
+            description: `Could not update item preference. ${error instanceof Error ? error.message : String(error)}`, 
+            variant: "destructive" 
+        });
     }
+    setIsOperating(false);
   };
 
   const handleUpdateBudget = async (newTotalBudget: number) => {
     if (!currentList) return;
+    setIsOperating(true);
     const listDocRef = doc(db, "buildLists", currentList.id);
     try {
       await updateDoc(listDocRef, { "budget.totalBudget": newTotalBudget });
@@ -228,12 +257,18 @@ export default function BuildListPage() {
       toast({ title: "Budget Updated", description: `Total budget set to ${currentList.budget.currencySymbol}${newTotalBudget.toFixed(2)}.` });
     } catch (error) {
       console.error("Error updating budget:", error);
-      toast({ title: "Error", description: "Could not update budget.", variant: "destructive" });
+      toast({ 
+        title: "Error Updating Budget", 
+        description: `Could not update budget. ${error instanceof Error ? error.message : String(error)}`, 
+        variant: "destructive" 
+      });
     }
+    setIsOperating(false);
   };
 
   const handleUpdateCurrency = async (newCurrencySymbol: string) => {
     if (!currentList) return;
+    setIsOperating(true);
     const listDocRef = doc(db, "buildLists", currentList.id);
     try {
       await updateDoc(listDocRef, { "budget.currencySymbol": newCurrencySymbol });
@@ -241,8 +276,13 @@ export default function BuildListPage() {
       toast({ title: "Currency Updated", description: `Currency symbol set to ${newCurrencySymbol}.` });
     } catch (error) {
       console.error("Error updating currency:", error);
-      toast({ title: "Error", description: "Could not update currency.", variant: "destructive" });
+      toast({ 
+        title: "Error Updating Currency", 
+        description: `Could not update currency. ${error instanceof Error ? error.message : String(error)}`, 
+        variant: "destructive" 
+      });
     }
+    setIsOperating(false);
   };
 
   const handleSortChange = (field: SortableField) => {
@@ -262,6 +302,7 @@ export default function BuildListPage() {
     const itemToUpdate = currentList.items.find(item => item.id === itemId);
     if (!itemToUpdate) return;
 
+    setIsOperating(true);
     const itemDocRef = doc(db, "buildLists", currentList.id, "items", itemId);
     
     const newIndividualPayments = [...(itemToUpdate.individualPayments || Array(itemToUpdate.numberOfPayments || 1).fill(0))];
@@ -275,16 +316,15 @@ export default function BuildListPage() {
     }
 
     if (!paymentLogged) {
-        toast({ title: "Error", description: "No available payment slot to log this amount.", variant: "destructive" });
+        toast({ title: "Error", description: "No available payment slot to log this amount. All planned payments might be logged.", variant: "destructive" });
+        setIsOperating(false);
         return;
     }
     
-    // Ensure total paid doesn't exceed total price due to this payment
     let currentTotalPaid = newIndividualPayments.reduce((sum, p) => sum + (p || 0), 0);
     if (currentTotalPaid > itemToUpdate.totalPrice) {
         const overPayment = currentTotalPaid - itemToUpdate.totalPrice;
-        // Find the index of the payment we just logged and adjust it
-        const lastLoggedPaymentIndex = newIndividualPayments.lastIndexOf(paymentAmount); // simple way, assumes unique or last
+        const lastLoggedPaymentIndex = newIndividualPayments.lastIndexOf(paymentAmount);
         if (lastLoggedPaymentIndex !== -1) {
             newIndividualPayments[lastLoggedPaymentIndex] = Math.max(0, paymentAmount - overPayment);
         }
@@ -303,8 +343,14 @@ export default function BuildListPage() {
         setIsLogPaymentModalOpen(false);
     } catch (error) {
         console.error("Error logging payment:", error);
-        toast({ title: "Error", description: "Could not log payment.", variant: "destructive" });
+        toast({ 
+            title: "Error Logging Payment", 
+            description: `Could not log payment. ${error instanceof Error ? error.message : String(error)}`, 
+            variant: "destructive" 
+        });
     }
+    setIsOperating(false);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentList, toast]);
 
 
@@ -389,7 +435,7 @@ export default function BuildListPage() {
 
         <div className="mt-8 mb-6 flex justify-between items-center">
           <h2 className="text-3xl font-headline text-primary">My Components</h2>
-          <Button onClick={openAddForm} variant="default" className="bg-accent hover:bg-accent/90 text-accent-foreground">
+          <Button onClick={openAddForm} variant="default" className="bg-accent hover:bg-accent/90 text-accent-foreground" disabled={isOperating}>
             <PlusCircle className="mr-2 h-5 w-5" /> Add Item
           </Button>
         </div>
@@ -414,20 +460,34 @@ export default function BuildListPage() {
                 onToggleIncludeInSpend={handleToggleIncludeInSpend}
                 onOpenLogPaymentModal={openLogPaymentModal}
                 currencySymbol={currentList.budget.currencySymbol}
+                disabled={isOperating}
               />
             ))}
           </div>
         ) : (
-           <Card className="col-span-full text-center py-12 shadow">
-            <CardContent className="flex flex-col items-center gap-4">
-              <AlertTriangle className="h-12 w-12 text-muted-foreground" />
-              <p className="text-xl font-medium">No components found for this list.</p>
-              <p className="text-muted-foreground">
-                {searchTerm ? "Try adjusting your search or filter criteria." : "Click \"Add Item\" to start building your list!"}
-              </p>
-            </CardContent>
-          </Card>
+           !isOperating && ( // Only show if not operating and no items
+            <Card className="col-span-full text-center py-12 shadow">
+                <CardContent className="flex flex-col items-center gap-4">
+                <AlertTriangle className="h-12 w-12 text-muted-foreground" />
+                <p className="text-xl font-medium">No components found for this list.</p>
+                <p className="text-muted-foreground">
+                    {searchTerm ? "Try adjusting your search or filter criteria." : "Click \"Add Item\" to start building your list!"}
+                </p>
+                </CardContent>
+            </Card>
+           )
         )}
+        
+        {isOperating && displayItems.length === 0 && ( // Show loader if operating and no items to display
+             <div className="col-span-full flex justify-center items-center py-12">
+                <svg className="animate-spin h-8 w-8 text-primary" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                 <p className="ml-2 text-xl font-headline">Processing...</p>
+            </div>
+        )}
+
 
         {currentList.items.length > 0 && (
             <div className="mt-12">
@@ -441,6 +501,7 @@ export default function BuildListPage() {
           onSubmit={editingItem ? handleEditItem : handleAddItem}
           initialData={editingItem}
           currencySymbol={currentList.budget.currencySymbol}
+          isOperating={isOperating}
         />
         {itemToLogPaymentFor && (
           <LogPaymentDialog
@@ -449,6 +510,7 @@ export default function BuildListPage() {
             itemBeingPaid={itemToLogPaymentFor}
             currencySymbol={currentList.budget.currencySymbol}
             onSubmitLogPayment={handleLogPayment}
+            isOperating={isOperating}
           />
         )}
       </main>

@@ -7,13 +7,13 @@ import { getFirestore, type Firestore } from "firebase/firestore";
 // IMPORTANT: Replace with your actual Firebase project configuration
 // It's recommended to store these in environment variables for security
 const firebaseConfig = {
-  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
-  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
-  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
-  storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
-  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
-  // measurementId: process.env.NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID, // Optional
+  apiKey: "AIzaSyA-Ox5V8CH7ZYJJJLUjw1Ir2plxnetDzY0",
+  authDomain: "buildmaster-27b4a.firebaseapp.com",
+  projectId: "buildmaster-27b4a",
+  storageBucket: "buildmaster-27b4a.firebasestorage.app",
+  messagingSenderId: "722399882640",
+  appId: "1:722399882640:web:6ac29c87dcb9945958d715",
+  // measurementId: "G-59SEZJECVM" // Optional
 };
 
 let app: FirebaseApp;

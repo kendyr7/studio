@@ -43,6 +43,7 @@ interface LogPaymentDialogProps {
   onSubmitLogPayment: (itemId: string, amount: number) => void;
   itemBeingPaid?: PurchaseItem;
   currencySymbol?: string;
+  isOperating?: boolean;
 }
 
 export function LogPaymentDialog({
@@ -51,6 +52,7 @@ export function LogPaymentDialog({
   onSubmitLogPayment,
   itemBeingPaid,
   currencySymbol = "$",
+  isOperating = false,
 }: LogPaymentDialogProps) {
   
   const form = useForm<LogPaymentFormData>({
@@ -62,19 +64,19 @@ export function LogPaymentDialog({
 
   React.useEffect(() => {
     if (isOpen && itemBeingPaid) {
-      // Calculate suggested amount for the *next* payment
-      const remainingForThisPayment = itemBeingPaid.totalPrice > 0 && itemBeingPaid.numberOfPayments > 0 
-                                    ? itemBeingPaid.totalPrice / itemBeingPaid.numberOfPayments // This is an average, may not be accurate if payments are uneven
-                                    : 0;
+      const alreadyPaidSlots = itemBeingPaid.individualPayments.filter(p => (p || 0) > 0).length;
+      const remainingSlots = itemBeingPaid.numberOfPayments - alreadyPaidSlots;
       
-      let suggestedAmount = itemBeingPaid.remainingBalance; // Default to total remaining balance
-      if (itemBeingPaid.numberOfPayments > 1 && itemBeingPaid.paymentsMade < itemBeingPaid.numberOfPayments) {
-        // If multiple payments and not all made, suggest the smaller of average payment or remaining balance
-        suggestedAmount = Math.min(itemBeingPaid.remainingBalance, remainingForThisPayment > 0 ? remainingForThisPayment : itemBeingPaid.remainingBalance);
+      let suggestedAmount = 0;
+      if (remainingSlots > 0 && itemBeingPaid.totalPrice > 0) {
+        const remainingBalanceOverall = itemBeingPaid.totalPrice - itemBeingPaid.paidAmount;
+        suggestedAmount = Math.max(0, Math.min(remainingBalanceOverall, itemBeingPaid.totalPrice / itemBeingPaid.numberOfPayments));
+      } else {
+        suggestedAmount = Math.max(0, itemBeingPaid.remainingBalance);
       }
-      
-      // Don't prefill, let user decide
-      form.reset({ paymentAmount: undefined });
+
+      form.reset({ paymentAmount: suggestedAmount > 0 ? parseFloat(suggestedAmount.toFixed(2)) : undefined });
+
     } else if (!isOpen) {
         form.reset({ paymentAmount: undefined });
     }
@@ -85,15 +87,15 @@ export function LogPaymentDialog({
     if (itemBeingPaid) {
       onSubmitLogPayment(itemBeingPaid.id, data.paymentAmount);
     }
-    onOpenChange(false);
+    // onOpenChange(false); // Let parent handle closing dialog
   };
 
   if (!itemBeingPaid) return null;
 
   const nextPaymentNumber = itemBeingPaid.paymentsMade + 1;
   const dialogDescription = itemBeingPaid.numberOfPayments > 1 
-    ? `Enter amount for payment ${nextPaymentNumber} of ${itemBeingPaid.numberOfPayments}. Remaining: ${formatCurrency(itemBeingPaid.remainingBalance, currencySymbol)}.`
-    : `Enter payment amount. Remaining: ${formatCurrency(itemBeingPaid.remainingBalance, currencySymbol)}.`;
+    ? `Log amount for payment ${nextPaymentNumber > itemBeingPaid.numberOfPayments ? itemBeingPaid.numberOfPayments : nextPaymentNumber} of ${itemBeingPaid.numberOfPayments}. Total remaining: ${formatCurrency(itemBeingPaid.remainingBalance, currencySymbol)}.`
+    : `Enter payment amount. Total remaining: ${formatCurrency(itemBeingPaid.remainingBalance, currencySymbol)}.`;
 
 
   return (
@@ -124,7 +126,8 @@ export function LogPaymentDialog({
                       step="0.01" 
                       placeholder="e.g., 50.00" 
                       {...field} 
-                      max={itemBeingPaid.remainingBalance} 
+                      max={itemBeingPaid.remainingBalance > 0 ? itemBeingPaid.remainingBalance : undefined} 
+                      disabled={isOperating}
                     />
                   </FormControl>
                   <FormMessage />
@@ -133,11 +136,11 @@ export function LogPaymentDialog({
             />
             <DialogFooter className="sm:justify-end gap-2 pt-4">
               <DialogClose asChild>
-                <Button type="button" variant="secondary">Cancel</Button>
+                <Button type="button" variant="secondary" disabled={isOperating}>Cancel</Button>
               </DialogClose>
-              <Button type="submit" variant="default" className="bg-accent hover:bg-accent/90 text-accent-foreground">
-                <CreditCard className="mr-2 h-4 w-4" />
-                Confirm Payment
+              <Button type="submit" variant="default" className="bg-accent hover:bg-accent/90 text-accent-foreground" disabled={isOperating || itemBeingPaid.remainingBalance <= 0}>
+                {isOperating ? "Logging..." : <CreditCard className="mr-2 h-4 w-4" />}
+                {isOperating ? "Confirm Payment" : "Confirm Payment"}
               </Button>
             </DialogFooter>
           </form>

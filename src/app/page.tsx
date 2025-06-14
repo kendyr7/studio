@@ -45,8 +45,8 @@ import {
   orderBy,
   Timestamp,
   serverTimestamp,
-  collectionGroup,
-  getCountFromServer
+  // collectionGroup, // Not used currently
+  // getCountFromServer // Not used currently
 } from 'firebase/firestore';
 
 // Placeholder user ID. In a real app, this would come from Firebase Auth.
@@ -82,6 +82,7 @@ export default function HomePage() {
           
           // Fetch items for each list to calculate overview stats
           // This is N+1, consider optimizing for many lists (e.g., aggregated fields in Firestore)
+          // For now, prioritizing getting saves to work.
           const itemsColRef = collection(db, "buildLists", docSnap.id, "items");
           const itemsSnapshot = await getDocs(itemsColRef);
           const items = itemsSnapshot.docs.map(itemDoc => ({ id: itemDoc.id, ...itemDoc.data() } as StoredPurchaseItem));
@@ -90,29 +91,34 @@ export default function HomePage() {
             id: docSnap.id,
             name: listData.name,
             createdAt: (listData.createdAt as Timestamp)?.toDate().toISOString() || new Date().toISOString(),
-            version: listData.version,
-            budget: listData.budget,
+            version: listData.version || APP_DATA_VERSION,
+            budget: listData.budget || { totalBudget: 0, currencySymbol: "$" },
             userId: listData.userId,
-            items: items, // Include items for overview calculation
+            items: items, 
           });
         }
         setBuildLists(lists);
       } catch (error) {
         console.error("Error fetching build lists:", error);
-        toast({ title: "Error", description: "Could not fetch build lists.", variant: "destructive" });
+        toast({ 
+          title: "Error Fetching Lists", 
+          description: `Could not fetch build lists. ${error instanceof Error ? error.message : String(error)}`, 
+          variant: "destructive" 
+        });
       }
       setIsLoading(false);
     };
 
     fetchBuildLists();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [toast]);
+  }, [toast]); // Removed buildLists from dependencies to prevent potential loops if not careful with updates
 
   const handleCreateNewList = async () => {
     if (!newListName.trim()) {
       toast({ title: "Error", description: "List name cannot be empty.", variant: "destructive" });
       return;
     }
+    setIsLoading(true);
     try {
       const newListData = {
         name: newListName.trim(),
@@ -123,12 +129,14 @@ export default function HomePage() {
       };
       const docRef = await addDoc(collection(db, "buildLists"), newListData);
       
-      // Optimistically add to UI or refetch
       const newUiList: BuildList = {
-        ...newListData,
         id: docRef.id,
-        createdAt: new Date().toISOString(), // Approximate for UI until refetch or proper server timestamp handling
-        items: [] // New list has no items initially
+        name: newListData.name,
+        createdAt: new Date().toISOString(), // Use current date for optimistic update
+        version: newListData.version,
+        budget: newListData.budget,
+        userId: newListData.userId,
+        items: [] 
       };
       setBuildLists(prev => [newUiList, ...prev]);
 
@@ -137,26 +145,36 @@ export default function HomePage() {
       toast({ title: "List Created", description: `"${newListData.name}" has been created.` });
     } catch (error) {
       console.error("Error creating new list:", error);
-      toast({ title: "Error", description: "Could not create new list.", variant: "destructive" });
+      toast({ 
+        title: "Error Creating List", 
+        description: `Could not create new list. ${error instanceof Error ? error.message : String(error)}`, 
+        variant: "destructive" 
+      });
     }
+    setIsLoading(false);
   };
 
   const handleDeleteList = async (listId: string) => {
     const list = buildLists.find(l => l.id === listId);
     if (!list) return;
 
+    setIsLoading(true);
     try {
-      // Note: Deleting subcollections in Firestore from the client-side is complex.
-      // For simplicity, this only deletes the main list document.
-      // In a production app, you'd use a Firebase Function to delete subcollections.
+      // Note: Deleting subcollections in Firestore from the client-side is complex and often requires Firebase Functions.
+      // This only deletes the main list document. Items subcollection will remain orphaned.
       await deleteDoc(doc(db, "buildLists", listId));
       setBuildLists(prev => prev.filter(l => l.id !== listId));
-      toast({ title: "List Deleted", description: `"${list.name}" has been deleted. Items within the list are not automatically deleted from the database.`, variant: "destructive" });
+      toast({ title: "List Deleted", description: `"${list.name}" has been deleted. Items within the list are not automatically deleted.`, variant: "destructive" });
     } catch (error) {
       console.error("Error deleting list:", error);
-      toast({ title: "Error", description: "Could not delete list.", variant: "destructive" });
+      toast({ 
+        title: "Error Deleting List", 
+        description: `Could not delete list. ${error instanceof Error ? error.message : String(error)}`, 
+        variant: "destructive" 
+      });
     }
     setListToDelete(null);
+    setIsLoading(false);
   };
 
   const openEditListNameDialog = (list: BuildList) => {
@@ -170,6 +188,7 @@ export default function HomePage() {
       toast({ title: "Error", description: "List name cannot be empty.", variant: "destructive" });
       return;
     }
+    setIsLoading(true);
     try {
       const listRef = doc(db, "buildLists", listToEditName.id);
       await updateDoc(listRef, { name: editingListName.trim() });
@@ -185,11 +204,16 @@ export default function HomePage() {
       setEditingListName("");
     } catch (error) {
       console.error("Error updating list name:", error);
-      toast({ title: "Error", description: "Could not update list name.", variant: "destructive" });
+      toast({ 
+        title: "Error Updating Name", 
+        description: `Could not update list name. ${error instanceof Error ? error.message : String(error)}`, 
+        variant: "destructive" 
+      });
     }
+    setIsLoading(false);
   };
   
-  if (isLoading) {
+  if (isLoading && buildLists.length === 0) { // Show loader only on initial load or during operations
      return (
         <div className="min-h-screen bg-background text-foreground flex flex-col items-center justify-center">
             <div className="flex items-center space-x-2">
@@ -217,6 +241,7 @@ export default function HomePage() {
         {buildLists.length > 0 ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {buildLists.map(list => {
+              // Calculations for overview are done here using the items fetched earlier
               const enrichedItems = list.items.map(item => enrichPurchaseItem(item));
               const totalPaidForList = enrichedItems.reduce((sum, item) => sum + item.paidAmount, 0);
               const totalRemainingForList = enrichedItems.reduce((sum, item) => sum + item.remainingBalance, 0);
@@ -273,13 +298,15 @@ export default function HomePage() {
             })}
           </div>
         ) : (
-          <Card className="col-span-full text-center py-12 shadow">
-            <CardContent className="flex flex-col items-center gap-4">
-              <AlertTriangle className="h-12 w-12 text-muted-foreground" />
-              <p className="text-xl font-medium">No build lists found.</p>
-              <p className="text-muted-foreground">Click "Create New List" to get started!</p>
-            </CardContent>
-          </Card>
+          !isLoading && ( // Only show "No lists" if not loading and lists are empty
+            <Card className="col-span-full text-center py-12 shadow">
+              <CardContent className="flex flex-col items-center gap-4">
+                <AlertTriangle className="h-12 w-12 text-muted-foreground" />
+                <p className="text-xl font-medium">No build lists found.</p>
+                <p className="text-muted-foreground">Click "Create New List" to get started!</p>
+              </CardContent>
+            </Card>
+          )
         )}
       </main>
 
@@ -301,7 +328,9 @@ export default function HomePage() {
             <DialogClose asChild>
                 <Button type="button" variant="secondary">Cancel</Button>
             </DialogClose>
-            <Button onClick={handleCreateNewList} className="bg-primary hover:bg-primary/90 text-primary-foreground">Create List</Button>
+            <Button onClick={handleCreateNewList} className="bg-primary hover:bg-primary/90 text-primary-foreground" disabled={isLoading}>
+              {isLoading && newListName ? "Creating..." : "Create List"}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -324,7 +353,9 @@ export default function HomePage() {
             <DialogClose asChild>
                 <Button type="button" variant="secondary" onClick={() => { setIsEditListNameDialogOpen(false); setListToEditName(null); setEditingListName(""); }}>Cancel</Button>
             </DialogClose>
-            <Button onClick={handleUpdateListName} className="bg-primary hover:bg-primary/90 text-primary-foreground">Save Name</Button>
+            <Button onClick={handleUpdateListName} className="bg-primary hover:bg-primary/90 text-primary-foreground" disabled={isLoading}>
+              {isLoading && listToEditName ? "Saving..." : "Save Name"}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
