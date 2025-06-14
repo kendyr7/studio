@@ -1,3 +1,4 @@
+
 "use client";
 
 import { useState, useEffect, useMemo, useCallback } from 'react';
@@ -15,6 +16,7 @@ import { APP_DATA_VERSION, LOCAL_STORAGE_KEY } from "@/lib/constants";
 import { enrichPurchaseItem, calculateItemStatus } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import { format, parseISO } from 'date-fns';
+import { Card, CardContent } from "@/components/ui/card";
 
 const initialAppData: AppData = {
   version: APP_DATA_VERSION,
