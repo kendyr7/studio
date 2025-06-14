@@ -56,38 +56,45 @@ export function LogPaymentDialog({
   const form = useForm<LogPaymentFormData>({
     resolver: zodResolver(logPaymentSchema),
     defaultValues: {
-      paymentAmount: undefined, // User must input
+      paymentAmount: undefined,
     },
   });
 
   React.useEffect(() => {
     if (isOpen && itemBeingPaid) {
-      // Suggest remaining balance for the payment if it's a single payment left or less than total remaining
+      // Calculate suggested amount for the *next* payment
       const remainingForThisPayment = itemBeingPaid.totalPrice > 0 && itemBeingPaid.numberOfPayments > 0 
-                                    ? itemBeingPaid.totalPrice / itemBeingPaid.numberOfPayments 
+                                    ? itemBeingPaid.totalPrice / itemBeingPaid.numberOfPayments // This is an average, may not be accurate if payments are uneven
                                     : 0;
-      const suggestedAmount = Math.min(itemBeingPaid.remainingBalance, remainingForThisPayment > 0 ? remainingForThisPayment : itemBeingPaid.remainingBalance);
       
-      // Only set if it makes sense (e.g. not 0, and item has remaining balance)
-      if (suggestedAmount > 0 && itemBeingPaid.remainingBalance > 0) {
-         // form.setValue("paymentAmount", parseFloat(suggestedAmount.toFixed(2)));
-         // Let's not prefill, user can decide
-      } else {
-        form.reset({ paymentAmount: undefined });
+      let suggestedAmount = itemBeingPaid.remainingBalance; // Default to total remaining balance
+      if (itemBeingPaid.numberOfPayments > 1 && itemBeingPaid.paymentsMade < itemBeingPaid.numberOfPayments) {
+        // If multiple payments and not all made, suggest the smaller of average payment or remaining balance
+        suggestedAmount = Math.min(itemBeingPaid.remainingBalance, remainingForThisPayment > 0 ? remainingForThisPayment : itemBeingPaid.remainingBalance);
       }
+      
+      // Don't prefill, let user decide
+      form.reset({ paymentAmount: undefined });
     } else if (!isOpen) {
         form.reset({ paymentAmount: undefined });
     }
-  }, [isOpen, itemBeingPaid, form]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, itemBeingPaid]); // form is not needed in deps for reset
 
   const handleFormSubmit = (data: LogPaymentFormData) => {
     if (itemBeingPaid) {
       onSubmitLogPayment(itemBeingPaid.id, data.paymentAmount);
     }
-    onOpenChange(false); // Close dialog after submit
+    onOpenChange(false);
   };
 
   if (!itemBeingPaid) return null;
+
+  const nextPaymentNumber = itemBeingPaid.paymentsMade + 1;
+  const dialogDescription = itemBeingPaid.numberOfPayments > 1 
+    ? `Enter amount for payment ${nextPaymentNumber} of ${itemBeingPaid.numberOfPayments}. Remaining: ${formatCurrency(itemBeingPaid.remainingBalance, currencySymbol)}.`
+    : `Enter payment amount. Remaining: ${formatCurrency(itemBeingPaid.remainingBalance, currencySymbol)}.`;
+
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => {
@@ -100,8 +107,7 @@ export function LogPaymentDialog({
         <DialogHeader>
           <DialogTitle className="font-headline text-2xl">Log Payment for {itemBeingPaid.name}</DialogTitle>
           <DialogDescription>
-            Enter the amount for this payment. Remaining: {formatCurrency(itemBeingPaid.remainingBalance, currencySymbol)}.
-            {itemBeingPaid.numberOfPayments > 1 && ` Payment ${itemBeingPaid.paymentsMade + 1} of ${itemBeingPaid.numberOfPayments}.`}
+            {dialogDescription}
           </DialogDescription>
         </DialogHeader>
         <Form {...form}>
@@ -118,7 +124,7 @@ export function LogPaymentDialog({
                       step="0.01" 
                       placeholder="e.g., 50.00" 
                       {...field} 
-                      max={itemBeingPaid.remainingBalance} // Cannot pay more than remaining
+                      max={itemBeingPaid.remainingBalance} 
                     />
                   </FormControl>
                   <FormMessage />

@@ -16,7 +16,7 @@ import type { StoredPurchaseItem, PurchaseItem as DisplayPurchaseItem, BudgetDat
 import { APP_DATA_VERSION, LOCAL_STORAGE_KEY } from "@/lib/constants";
 import { enrichPurchaseItem } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
-import { Card, CardContent } from "@/components/ui/card"; // Ensure Card and CardContent are imported
+import { Card, CardContent } from "@/components/ui/card";
 
 const initialAppData: AppData = {
   version: APP_DATA_VERSION,
@@ -38,18 +38,65 @@ export default function BuildMasterPage() {
   const [filterStatus, setFilterStatus] = useState<FilterStatus>('All');
   
   const [isClient, setIsClient] = useState(false);
+
   useEffect(() => {
     setIsClient(true);
     if (appData.version !== APP_DATA_VERSION) {
         console.warn(`Data version mismatch. Expected ${APP_DATA_VERSION}, found ${appData.version}. Consider migrating data.`);
     }
+
+    // One-time shallow migration for items from old structure
+    setAppData(prev => {
+      const migratedItems = prev.items.map(item => {
+        const oldItem = item as any; // To access potentially old fields
+        if (!item.individualPayments && typeof oldItem.paidAmount !== 'undefined' && typeof oldItem.paymentsMade !== 'undefined') {
+          const newIndividualPayments = Array(item.numberOfPayments || 1).fill(0);
+          if (oldItem.paymentsMade === 1 && item.numberOfPayments === 1 && oldItem.paidAmount > 0) {
+            newIndividualPayments[0] = oldItem.paidAmount;
+          } else if (oldItem.paymentsMade > 0 && item.numberOfPayments > 0 && oldItem.paidAmount > 0) {
+            // This is a lossy conversion for multi-payment old items.
+            // We can put the total paid amount into the first payment slot if number of payments is 1.
+            // Or distribute if paymentsMade and numberOfPayments match.
+            // For simplicity, if it was multi-payment, let user re-enter.
+            if (item.numberOfPayments === 1) {
+                 newIndividualPayments[0] = oldItem.paidAmount;
+            }
+          }
+          return {
+            ...item,
+            individualPayments: newIndividualPayments,
+            paidAmount: undefined, // Remove old field
+            paymentsMade: undefined, // Remove old field
+          } as StoredPurchaseItem;
+        }
+        // Ensure individualPayments array matches numberOfPayments
+        if (item.individualPayments && item.individualPayments.length !== (item.numberOfPayments || 1)) {
+            const correctedPayments = Array(item.numberOfPayments || 1).fill(0);
+            for(let i=0; i< Math.min(item.individualPayments.length, correctedPayments.length); i++) {
+                correctedPayments[i] = item.individualPayments[i];
+            }
+            return {...item, individualPayments: correctedPayments};
+        }
+        return item;
+      });
+      if (JSON.stringify(prev.items) !== JSON.stringify(migratedItems)) {
+        return { ...prev, items: migratedItems };
+      }
+      return prev;
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [appData.version]);
 
 
   const handleAddItem = (data: PurchaseItemFormData) => {
     const newItem: StoredPurchaseItem = {
       id: crypto.randomUUID(),
-      ...data, // Includes name, totalPrice, paidAmount, numberOfPayments, paymentsMade, notes, includeInSpendCalculation
+      name: data.name,
+      totalPrice: data.totalPrice,
+      numberOfPayments: data.numberOfPayments,
+      individualPayments: data.individualPayments.map(p => p || 0),
+      notes: data.notes,
+      includeInSpendCalculation: data.includeInSpendCalculation,
     };
     setAppData(prev => ({ ...prev, items: [...prev.items, newItem] }));
     toast({ title: "Item Added", description: `${data.name} has been added to your list.` });
@@ -59,7 +106,12 @@ export default function BuildMasterPage() {
     if (!editingItem) return;
     const updatedItem: StoredPurchaseItem = {
       ...editingItem,
-      ...data, // This will overwrite all fields from the form, including paymentsMade
+      name: data.name,
+      totalPrice: data.totalPrice,
+      numberOfPayments: data.numberOfPayments,
+      individualPayments: data.individualPayments.map(p => p || 0),
+      notes: data.notes,
+      includeInSpendCalculation: data.includeInSpendCalculation,
     };
     setAppData(prev => ({
       ...prev,
@@ -122,22 +174,31 @@ export default function BuildMasterPage() {
     setAppData(prev => {
       const updatedItems = prev.items.map(item => {
         if (item.id === itemId) {
-          const currentPaymentsMade = item.paymentsMade ?? 0;
-          const totalNumberOfPayments = item.numberOfPayments ?? 1;
-
-          if (currentPaymentsMade < totalNumberOfPayments && item.paidAmount < item.totalPrice) {
-            let newPaidAmount = Math.min(item.totalPrice, (item.paidAmount ?? 0) + paymentAmount);
-            const newPaymentsMade = currentPaymentsMade + 1;
-
-            // If this payment makes it fully paid or it's the last designated payment
-            if (newPaidAmount >= item.totalPrice || newPaymentsMade === totalNumberOfPayments) {
-              newPaidAmount = item.totalPrice; // Ensure it's exactly total price if it's the last or goes over
+          const newIndividualPayments = [...item.individualPayments];
+          let paymentLogged = false;
+          for (let i = 0; i < newIndividualPayments.length; i++) {
+            if ((newIndividualPayments[i] === 0 || newIndividualPayments[i] === undefined) && !paymentLogged) {
+              newIndividualPayments[i] = paymentAmount;
+              paymentLogged = true;
+              break; 
             }
-            
+          }
+          
+          if (paymentLogged) {
+             // Recalculate total paid to ensure it doesn't exceed total price
+            let currentTotalPaid = newIndividualPayments.reduce((sum, p) => sum + (p || 0), 0);
+            if (currentTotalPaid > item.totalPrice) {
+                // If overpaid due to this payment, adjust this payment
+                const overPayment = currentTotalPaid - item.totalPrice;
+                const lastLoggedPaymentIndex = newIndividualPayments.indexOf(paymentAmount); // find the current payment
+                 if (lastLoggedPaymentIndex !== -1) {
+                    newIndividualPayments[lastLoggedPaymentIndex] = Math.max(0, paymentAmount - overPayment);
+                 }
+            }
+
             return { 
               ...item, 
-              paymentsMade: newPaymentsMade, 
-              paidAmount: parseFloat(newPaidAmount.toFixed(2))
+              individualPayments: newIndividualPayments
             };
           }
         }
@@ -156,12 +217,15 @@ export default function BuildMasterPage() {
   const displayItems: DisplayPurchaseItem[] = useMemo(() => {
     let items = appData.items.map(item => {
       const storedItemWithDefaults: StoredPurchaseItem = {
-        ...item,
-        numberOfPayments: item.numberOfPayments ?? 1,
-        paymentsMade: item.paymentsMade ?? 0,
-        includeInSpendCalculation: item.includeInSpendCalculation ?? true,
-        paidAmount: item.paidAmount ?? 0,
+        id: item.id,
+        name: item.name,
         totalPrice: item.totalPrice ?? 0,
+        notes: item.notes,
+        numberOfPayments: item.numberOfPayments ?? 1,
+        individualPayments: item.individualPayments && item.individualPayments.length > 0 
+            ? item.individualPayments 
+            : Array(item.numberOfPayments || 1).fill(0),
+        includeInSpendCalculation: item.includeInSpendCalculation ?? true,
       };
       return enrichPurchaseItem(storedItemWithDefaults);
     });
@@ -178,7 +242,11 @@ export default function BuildMasterPage() {
         const statusOrder: Record<ItemStatus, number> = { 'Pending': 1, 'Partially Paid': 2, 'Paid': 3 };
         valA = statusOrder[a.status];
         valB = statusOrder[b.status];
+      } else if (sortConfig.field === 'paidAmount') { // Ensure derived paidAmount is used for sorting
+        valA = a.paidAmount;
+        valB = b.paidAmount;
       }
+
 
       let comparison = 0;
       if (typeof valA === 'string' && typeof valB === 'string') {

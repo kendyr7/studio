@@ -10,8 +10,8 @@ export function calculateItemStatus(totalPrice: number, paidAmount: number): Ite
   if (paidAmount <= 0 && totalPrice > 0) return 'Pending';
   if (paidAmount > 0 && paidAmount < totalPrice) return 'Partially Paid';
   if (paidAmount >= totalPrice && totalPrice > 0) return 'Paid';
-  if (totalPrice === 0 && paidAmount === 0) return 'Pending'; // Or 'Paid' if 0 cost means it's acquired
-  return 'Pending'; // Default case
+  if (totalPrice === 0 && paidAmount === 0) return 'Pending'; 
+  return 'Pending'; 
 }
 
 export function calculateRemainingBalance(totalPrice: number, paidAmount: number): number {
@@ -19,11 +19,21 @@ export function calculateRemainingBalance(totalPrice: number, paidAmount: number
 }
 
 export function enrichPurchaseItem(item: StoredPurchaseItem): PurchaseItem {
-  const remainingBalance = calculateRemainingBalance(item.totalPrice, item.paidAmount);
-  const status = calculateItemStatus(item.totalPrice, item.paidAmount);
-  return { ...item, remainingBalance, status };
+  const paidAmount = item.individualPayments.reduce((sum, payment) => sum + (payment || 0), 0);
+  const paymentsMade = item.individualPayments.filter(p => p > 0).length;
+  
+  const remainingBalance = calculateRemainingBalance(item.totalPrice, paidAmount);
+  const status = calculateItemStatus(item.totalPrice, paidAmount);
+  
+  return { 
+    ...item, 
+    paidAmount,
+    paymentsMade,
+    remainingBalance, 
+    status 
+  };
 }
 
 export function formatCurrency(amount: number, currencySymbol: string = '$'): string {
-  return `${currencySymbol}${amount.toFixed(2)}`;
+  return `${currencySymbol}${(amount || 0).toFixed(2)}`;
 }

@@ -3,7 +3,7 @@
 
 import * as React from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useForm } from "react-hook-form";
+import { useForm, Controller, useWatch } from "react-hook-form";
 import * as z from "zod";
 import type { StoredPurchaseItem } from "@/types";
 
@@ -28,28 +28,26 @@ import {
   DialogDescription,
   DialogClose,
 } from "@/components/ui/dialog";
-import { PlusCircle, Edit } from "lucide-react";
+import { PlusCircle, Edit, DollarSign } from "lucide-react";
 
 const purchaseItemSchema = z.object({
   name: z.string().min(1, { message: "Product name is required." }).max(100),
   totalPrice: z.coerce.number().min(0, { message: "Total price must be non-negative." }),
-  paidAmount: z.coerce.number().min(0, { message: "Paid amount must be non-negative." }),
   numberOfPayments: z.coerce.number().int().min(1, { message: "Number of payments must be at least 1."}).default(1),
-  paymentsMade: z.coerce.number().int().min(0, { message: "Payments made must be non-negative." }).default(0),
+  individualPayments: z.array(z.coerce.number().min(0, {message: "Payment amount must be non-negative"}).optional()).default([]),
   notes: z.string().max(500).optional(),
   includeInSpendCalculation: z.boolean().default(true),
 })
-.refine(data => data.paidAmount <= data.totalPrice, {
-  message: "Paid amount cannot exceed total price.",
-  path: ["paidAmount"],
+.refine(data => {
+    const sumOfIndividualPayments = data.individualPayments.reduce((acc, val) => acc + (val || 0), 0);
+    return sumOfIndividualPayments <= data.totalPrice;
+}, {
+  message: "Total of individual payments cannot exceed total price.",
+  path: ["individualPayments"],
 })
-.refine(data => data.paymentsMade <= data.numberOfPayments, {
-  message: "Payments made cannot exceed Number of Payments.",
-  path: ["paymentsMade"],
-})
-.refine(data => data.paidAmount > 0 || data.paymentsMade === 0, {
-  message: "If Paid Amount is 0, Payments Made must also be 0. Or, if Payments Made > 0, Paid Amount must be > 0.",
-  path: ["paymentsMade"], 
+.refine(data => data.individualPayments.length <= data.numberOfPayments, {
+    message: "Number of payment entries cannot exceed 'Number of Payments'.",
+    path: ["individualPayments"],
 });
 
 
@@ -72,44 +70,75 @@ export function PurchaseItemForm({
 }: PurchaseItemFormProps) {
 
   const getSafeFormValues = React.useCallback((data?: StoredPurchaseItem): PurchaseItemFormData => {
-    const defaults: PurchaseItemFormData = {
+    const defaults: Omit<PurchaseItemFormData, 'individualPayments'> & { individualPayments?: number[] } = {
       name: "",
       totalPrice: 0,
-      paidAmount: 0,
       numberOfPayments: 1,
-      paymentsMade: 0,
       notes: "",
       includeInSpendCalculation: true,
     };
 
+    const numPayments = (data?.numberOfPayments !== undefined && data.numberOfPayments >= 1)
+                            ? data.numberOfPayments
+                            : defaults.numberOfPayments;
+
+    let currentIndividualPayments: number[] = [];
+    if (data?.individualPayments) {
+        currentIndividualPayments = Array(numPayments).fill(0).map((_, i) => data.individualPayments[i] || 0);
+    } else {
+        currentIndividualPayments = Array(numPayments).fill(0);
+    }
+    
     if (data) {
       return {
         name: data.name || defaults.name,
         totalPrice: data.totalPrice ?? defaults.totalPrice,
-        paidAmount: data.paidAmount ?? defaults.paidAmount,
-        numberOfPayments: (data.numberOfPayments !== undefined && data.numberOfPayments !== null && data.numberOfPayments >= 1)
-                          ? data.numberOfPayments
-                          : defaults.numberOfPayments,
-        paymentsMade: data.paymentsMade ?? defaults.paymentsMade,
+        numberOfPayments: numPayments,
+        individualPayments: currentIndividualPayments,
         notes: data.notes || defaults.notes,
         includeInSpendCalculation: data.includeInSpendCalculation ?? defaults.includeInSpendCalculation,
       };
     }
-    return defaults;
+    return {
+        ...defaults,
+        numberOfPayments: numPayments,
+        individualPayments: currentIndividualPayments,
+    } as PurchaseItemFormData;
   }, []);
-
+  
   const form = useForm<PurchaseItemFormData>({
     resolver: zodResolver(purchaseItemSchema),
     defaultValues: getSafeFormValues(initialData),
   });
+  
+  const watchedNumberOfPayments = useWatch({ control: form.control, name: "numberOfPayments" });
+  const watchedIndividualPayments = useWatch({ control: form.control, name: "individualPayments" });
 
   React.useEffect(() => {
     form.reset(getSafeFormValues(initialData));
-  }, [initialData, form, getSafeFormValues]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialData, isOpen]); // Reset only when initialData changes or dialog opens
+
+  React.useEffect(() => {
+    const currentIndividualPayments = form.getValues("individualPayments") || [];
+    const newNumberOfPayments = watchedNumberOfPayments || 1;
+    
+    if (currentIndividualPayments.length !== newNumberOfPayments) {
+      const newIndividualPaymentsArray = Array(newNumberOfPayments).fill(0);
+      for (let i = 0; i < Math.min(currentIndividualPayments.length, newNumberOfPayments); i++) {
+        newIndividualPaymentsArray[i] = currentIndividualPayments[i] || 0;
+      }
+      form.setValue("individualPayments", newIndividualPaymentsArray, { shouldValidate: true, shouldDirty: true });
+    }
+  }, [watchedNumberOfPayments, form]);
 
 
   const handleFormSubmit = (data: PurchaseItemFormData) => {
-    onSubmit(data);
+    const submissionData = {
+        ...data,
+        individualPayments: Array(data.numberOfPayments).fill(0).map((_,i) => data.individualPayments[i] || 0)
+    }
+    onSubmit(submissionData);
     onOpenChange(false); 
   };
 
@@ -117,10 +146,10 @@ export function PurchaseItemForm({
     <Dialog open={isOpen} onOpenChange={(open) => {
       onOpenChange(open);
       if (!open) {
-        form.reset(getSafeFormValues(initialData)); 
+        // form.reset(getSafeFormValues(initialData)); // Reset on close if needed
       }
     }}>
-      <DialogContent className="sm:max-w-[480px] bg-card text-card-foreground">
+      <DialogContent className="sm:max-w-[520px] bg-card text-card-foreground">
         <DialogHeader>
           <DialogTitle className="font-headline text-2xl">
             {initialData ? "Edit Item" : "Add New Item"}
@@ -130,7 +159,7 @@ export function PurchaseItemForm({
           </DialogDescription>
         </DialogHeader>
         <Form {...form}>
-          <form onSubmit={form.handleSubmit(handleFormSubmit)} className="space-y-6 p-1">
+          <form onSubmit={form.handleSubmit(handleFormSubmit)} className="space-y-6 p-1 max-h-[70vh] overflow-y-auto">
             <FormField
               control={form.control}
               name="name"
@@ -160,46 +189,60 @@ export function PurchaseItemForm({
               />
               <FormField
                 control={form.control}
-                name="paidAmount"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Amount Paid ({currencySymbol})</FormLabel>
-                    <FormControl>
-                      <Input type="number" step="0.01" placeholder="e.g., 300.00" {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              <FormField
-                control={form.control}
                 name="numberOfPayments"
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>Number of Payments</FormLabel>
                     <FormControl>
-                      <Input type="number" step="1" min="1" placeholder="e.g., 3" {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name="paymentsMade"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Payments Made</FormLabel>
-                    <FormControl>
-                      <Input type="number" step="1" min="0" placeholder="e.g., 1" {...field} />
+                      <Input type="number" step="1" min="1" placeholder="e.g., 3" {...field} 
+                       onChange={(e) => {
+                          let val = parseInt(e.target.value, 10);
+                          if (isNaN(val) || val < 1) val = 1;
+                          field.onChange(val);
+                       }}
+                      />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
                 )}
               />
             </div>
+
+            {watchedNumberOfPayments > 0 && (
+              <div className="space-y-3 pt-2">
+                <FormLabel className="text-base">Individual Payments ({currencySymbol})</FormLabel>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-3">
+                  {Array.from({ length: watchedNumberOfPayments || 0 }).map((_, index) => (
+                    <FormField
+                      key={index}
+                      control={form.control}
+                      name={`individualPayments.${index}`}
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel className="text-xs text-muted-foreground">Payment {index + 1}</FormLabel>
+                          <FormControl>
+                            <div className="relative">
+                               <DollarSign className="absolute left-2 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                               <Input 
+                                type="number" 
+                                step="0.01" 
+                                placeholder="0.00" 
+                                {...field} 
+                                value={field.value ?? ""}
+                                onChange={(e) => field.onChange(parseFloat(e.target.value) || 0)}
+                                className="pl-7"
+                               />
+                            </div>
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
+
             <FormField
               control={form.control}
               name="notes"
@@ -232,7 +275,7 @@ export function PurchaseItemForm({
                 </FormItem>
               )}
             />
-            <DialogFooter className="sm:justify-end gap-2 pt-4">
+            <DialogFooter className="sm:justify-end gap-2 pt-4 sticky bottom-0 bg-card pb-2">
               <DialogClose asChild>
                  <Button type="button" variant="secondary">Cancel</Button>
               </DialogClose>

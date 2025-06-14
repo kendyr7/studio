@@ -29,11 +29,11 @@ export function PurchaseItemCard({
 }: PurchaseItemCardProps) {
   const monetaryProgressPercentage = item.totalPrice > 0 ? (item.paidAmount / item.totalPrice) * 100 : (item.paidAmount > 0 ? 100 : 0);
   
-  const canLogPayment = item.paymentsMade < item.numberOfPayments && item.paidAmount < item.totalPrice;
-  
-  const paymentsMadeCount = item.paymentsMade ?? 0;
-  const numberOfPaymentsCount = item.numberOfPayments ?? 1; // Ensure it's at least 1
+  const paymentsMadeCount = item.paymentsMade;
+  const numberOfPaymentsCount = item.numberOfPayments;
 
+  const canLogPayment = paymentsMadeCount < numberOfPaymentsCount && item.paidAmount < item.totalPrice;
+  
   const paymentsLoggedProgressPercentage = numberOfPaymentsCount > 0 ? (paymentsMadeCount / numberOfPaymentsCount) * 100 : 0;
 
   const logPaymentButtonText = () => {
@@ -73,7 +73,7 @@ export function PurchaseItemCard({
              <Progress 
                 value={paymentsLoggedProgressPercentage} 
                 aria-label="Payments logged progress" 
-                className="h-2 [&>div]:bg-destructive" 
+                className="h-2 [&>div]:bg-yellow-500" 
             />
           </div>
         )}

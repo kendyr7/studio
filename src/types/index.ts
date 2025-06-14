@@ -5,14 +5,15 @@ export interface StoredPurchaseItem {
   id: string;
   name: string;
   totalPrice: number;
-  paidAmount: number;
   notes?: string;
-  numberOfPayments: number; // Added
-  paymentsMade: number;    // Added
+  numberOfPayments: number; 
+  individualPayments: number[]; // Stores amount of each payment made
   includeInSpendCalculation: boolean;
 }
 
 export interface PurchaseItem extends StoredPurchaseItem {
+  paidAmount: number; // Derived from individualPayments
+  paymentsMade: number; // Derived from count of actual payments in individualPayments
   remainingBalance: number;
   status: ItemStatus;
 }
@@ -28,7 +29,7 @@ export interface AppData {
   items: StoredPurchaseItem[];
 }
 
-export type SortableField = 'name' | 'totalPrice' | 'paidAmount' | 'status'; // Removed 'estimatedCompletionDate'
+export type SortableField = 'name' | 'totalPrice' | 'paidAmount' | 'status';
 export type SortDirection = 'asc' | 'desc';
 
 export interface SortConfig {
