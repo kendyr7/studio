@@ -4,7 +4,7 @@
 import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { Button } from "@/components/ui/button";
-import { PlusCircle, Trash2, ExternalLink, AlertTriangle, Home, Edit } from "lucide-react";
+import { PlusCircle, Trash2, ExternalLink, AlertTriangle, Home, Edit, Loader2 } from "lucide-react";
 import { Header } from "@/components/layout/Header";
 import type { BuildList, StoredPurchaseItem } from "@/types";
 import { APP_DATA_VERSION } from "@/lib/constants";
@@ -45,17 +45,17 @@ import {
   orderBy,
   Timestamp,
   serverTimestamp,
-  // collectionGroup, // Not used currently
-  // getCountFromServer // Not used currently
+  writeBatch,
 } from 'firebase/firestore';
-
-// Placeholder user ID. In a real app, this would come from Firebase Auth.
-const PLACEHOLDER_USER_ID = "default-user";
+import { useAuth } from '@/app/providers';
+import { useRouter } from 'next/navigation';
 
 export default function HomePage() {
-  const [buildLists, setBuildLists] = useState<BuildList[]>([]);
+  const { user, loading: authLoading } = useAuth();
+  const router = useRouter();
   const { toast } = useToast();
 
+  const [buildLists, setBuildLists] = useState<BuildList[]>([]);
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [newListName, setNewListName] = useState("");
   const [listToDelete, setListToDelete] = useState<BuildList | null>(null);
@@ -64,30 +64,32 @@ export default function HomePage() {
   const [listToEditName, setListToEditName] = useState<BuildList | null>(null);
   const [editingListName, setEditingListName] = useState("");
   
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoadingData, setIsLoadingData] = useState(true); // For data fetching specifically
 
   useEffect(() => {
+    if (authLoading) return; // Wait for auth state to resolve
+    if (!user) {
+      router.push('/auth');
+      return;
+    }
+
     const fetchBuildLists = async () => {
-      setIsLoading(true);
+      if (!user) return;
+      setIsLoadingData(true);
       try {
         const q = query(
           collection(db, "buildLists"),
-          where("userId", "==", PLACEHOLDER_USER_ID),
+          where("userId", "==", user.uid),
           orderBy("createdAt", "desc")
         );
         const querySnapshot = await getDocs(q);
-        const lists: BuildList[] = [];
-        for (const docSnap of querySnapshot.docs) {
+        const listsPromises = querySnapshot.docs.map(async (docSnap) => {
           const listData = docSnap.data();
-          
-          // Fetch items for each list to calculate overview stats
-          // This is N+1, consider optimizing for many lists (e.g., aggregated fields in Firestore)
-          // For now, prioritizing getting saves to work.
           const itemsColRef = collection(db, "buildLists", docSnap.id, "items");
           const itemsSnapshot = await getDocs(itemsColRef);
           const items = itemsSnapshot.docs.map(itemDoc => ({ id: itemDoc.id, ...itemDoc.data() } as StoredPurchaseItem));
 
-          lists.push({
+          return {
             id: docSnap.id,
             name: listData.name,
             createdAt: (listData.createdAt as Timestamp)?.toDate().toISOString() || new Date().toISOString(),
@@ -95,8 +97,9 @@ export default function HomePage() {
             budget: listData.budget || { totalBudget: 0, currencySymbol: "$" },
             userId: listData.userId,
             items: items, 
-          });
-        }
+          } as BuildList;
+        });
+        const lists = await Promise.all(listsPromises);
         setBuildLists(lists);
       } catch (error) {
         console.error("Error fetching build lists:", error);
@@ -106,33 +109,37 @@ export default function HomePage() {
           variant: "destructive" 
         });
       }
-      setIsLoading(false);
+      setIsLoadingData(false);
     };
 
     fetchBuildLists();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [toast]); // Removed buildLists from dependencies to prevent potential loops if not careful with updates
+  }, [user, authLoading, router]); // toast removed
 
   const handleCreateNewList = async () => {
+    if (!user) {
+      toast({ title: "Authentication Error", description: "You must be logged in to create a list.", variant: "destructive" });
+      return;
+    }
     if (!newListName.trim()) {
       toast({ title: "Error", description: "List name cannot be empty.", variant: "destructive" });
       return;
     }
-    setIsLoading(true);
+    setIsLoadingData(true);
     try {
       const newListData = {
         name: newListName.trim(),
         createdAt: serverTimestamp(),
         version: APP_DATA_VERSION,
         budget: { totalBudget: 1500, currencySymbol: "$" },
-        userId: PLACEHOLDER_USER_ID,
+        userId: user.uid,
       };
       const docRef = await addDoc(collection(db, "buildLists"), newListData);
       
       const newUiList: BuildList = {
         id: docRef.id,
         name: newListData.name,
-        createdAt: new Date().toISOString(), // Use current date for optimistic update
+        createdAt: new Date().toISOString(), 
         version: newListData.version,
         budget: newListData.budget,
         userId: newListData.userId,
@@ -151,20 +158,28 @@ export default function HomePage() {
         variant: "destructive" 
       });
     }
-    setIsLoading(false);
+    setIsLoadingData(false);
   };
 
   const handleDeleteList = async (listId: string) => {
     const list = buildLists.find(l => l.id === listId);
     if (!list) return;
 
-    setIsLoading(true);
+    setIsLoadingData(true);
     try {
-      // Note: Deleting subcollections in Firestore from the client-side is complex and often requires Firebase Functions.
-      // This only deletes the main list document. Items subcollection will remain orphaned.
+      // Delete all items in the subcollection first
+      const itemsColRef = collection(db, "buildLists", listId, "items");
+      const itemsSnapshot = await getDocs(itemsColRef);
+      const batch = writeBatch(db);
+      itemsSnapshot.docs.forEach(itemDoc => {
+        batch.delete(itemDoc.ref);
+      });
+      await batch.commit();
+
+      // Then delete the list document
       await deleteDoc(doc(db, "buildLists", listId));
       setBuildLists(prev => prev.filter(l => l.id !== listId));
-      toast({ title: "List Deleted", description: `"${list.name}" has been deleted. Items within the list are not automatically deleted.`, variant: "destructive" });
+      toast({ title: "List Deleted", description: `"${list.name}" and all its items have been deleted.`, variant: "destructive" });
     } catch (error) {
       console.error("Error deleting list:", error);
       toast({ 
@@ -174,7 +189,7 @@ export default function HomePage() {
       });
     }
     setListToDelete(null);
-    setIsLoading(false);
+    setIsLoadingData(false);
   };
 
   const openEditListNameDialog = (list: BuildList) => {
@@ -188,7 +203,7 @@ export default function HomePage() {
       toast({ title: "Error", description: "List name cannot be empty.", variant: "destructive" });
       return;
     }
-    setIsLoading(true);
+    setIsLoadingData(true);
     try {
       const listRef = doc(db, "buildLists", listToEditName.id);
       await updateDoc(listRef, { name: editingListName.trim() });
@@ -210,22 +225,28 @@ export default function HomePage() {
         variant: "destructive" 
       });
     }
-    setIsLoading(false);
+    setIsLoadingData(false);
   };
   
-  if (isLoading && buildLists.length === 0) { // Show loader only on initial load or during operations
+  if (authLoading || (isLoadingData && !user)) { 
      return (
         <div className="min-h-screen bg-background text-foreground flex flex-col items-center justify-center">
             <div className="flex items-center space-x-2">
-                <svg className="animate-spin h-8 w-8 text-primary" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                </svg>
+                <Loader2 className="animate-spin h-8 w-8 text-primary" />
                 <p className="text-xl font-headline">Loading BuildMaster...</p>
             </div>
         </div>
     );
   }
+  
+  if (!user) { // Should be caught by useEffect redirect, but as a fallback
+      return (
+        <div className="min-h-screen bg-background text-foreground flex flex-col items-center justify-center">
+             <p className="text-xl font-headline">Redirecting to login...</p>
+        </div>
+      );
+  }
+
 
   return (
     <div className="min-h-screen bg-background text-foreground flex flex-col">
@@ -233,15 +254,19 @@ export default function HomePage() {
       <main className="container mx-auto px-4 py-8 flex-grow">
         <div className="flex justify-between items-center mb-8">
           <h1 className="text-3xl font-headline text-primary flex items-center"><Home className="mr-3 h-8 w-8" /> My Build Lists</h1>
-          <Button onClick={() => setIsCreateDialogOpen(true)} variant="default" className="bg-accent hover:bg-accent/90 text-accent-foreground">
+          <Button onClick={() => setIsCreateDialogOpen(true)} variant="default" className="bg-accent hover:bg-accent/90 text-accent-foreground" disabled={isLoadingData}>
             <PlusCircle className="mr-2 h-5 w-5" /> Create New List
           </Button>
         </div>
 
-        {buildLists.length > 0 ? (
+        {isLoadingData && buildLists.length === 0 ? (
+             <div className="flex justify-center items-center py-12">
+                <Loader2 className="animate-spin h-8 w-8 text-primary" />
+                <p className="ml-2 text-xl font-headline">Fetching lists...</p>
+            </div>
+        ) : buildLists.length > 0 ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {buildLists.map(list => {
-              // Calculations for overview are done here using the items fetched earlier
               const enrichedItems = list.items.map(item => enrichPurchaseItem(item));
               const totalPaidForList = enrichedItems.reduce((sum, item) => sum + item.paidAmount, 0);
               const totalRemainingForList = enrichedItems.reduce((sum, item) => sum + item.remainingBalance, 0);
@@ -261,12 +286,12 @@ export default function HomePage() {
                   <CardFooter className="border-t pt-4">
                     <div className="flex w-full justify-between items-center gap-2">
                       <div className="flex gap-2">
-                        <Button variant="outline" size="icon" onClick={() => openEditListNameDialog(list)} aria-label="Edit list name">
+                        <Button variant="outline" size="icon" onClick={() => openEditListNameDialog(list)} aria-label="Edit list name" disabled={isLoadingData}>
                           <Edit className="h-4 w-4" />
                         </Button>
                         <AlertDialog>
                           <AlertDialogTrigger asChild>
-                            <Button variant="destructive" size="icon" onClick={(e) => { e.stopPropagation(); setListToDelete(list); }} aria-label="Delete list">
+                            <Button variant="destructive" size="icon" onClick={(e) => { e.stopPropagation(); setListToDelete(list); }} aria-label="Delete list" disabled={isLoadingData}>
                               <Trash2 className="h-4 w-4" />
                             </Button>
                           </AlertDialogTrigger>
@@ -275,19 +300,21 @@ export default function HomePage() {
                               <AlertDialogHeader>
                                 <AlertDialogTitle>Are you sure?</AlertDialogTitle>
                                 <AlertDialogDescription>
-                                  This action will permanently delete the build list "{listToDelete.name}". This cannot be undone, and items within the list may not be automatically deleted from the database by this action.
+                                  This action will permanently delete the build list "{listToDelete.name}" and all its items. This cannot be undone.
                                 </AlertDialogDescription>
                               </AlertDialogHeader>
                               <AlertDialogFooter>
                                 <AlertDialogCancel onClick={() => setListToDelete(null)}>Cancel</AlertDialogCancel>
-                                <AlertDialogAction onClick={() => handleDeleteList(listToDelete.id)}>Delete List</AlertDialogAction>
+                                <AlertDialogAction onClick={() => handleDeleteList(listToDelete.id)} disabled={isLoadingData}>
+                                    {isLoadingData ? <Loader2 className="animate-spin mr-2 h-4 w-4"/> : null} Delete List
+                                </AlertDialogAction>
                               </AlertDialogFooter>
                             </AlertDialogContent>
                           )}
                         </AlertDialog>
                       </div>
                       <Link href={`/build/${list.id}`} passHref className="flex-grow ml-2">
-                        <Button variant="outline" size="sm" className="w-full">
+                        <Button variant="outline" size="sm" className="w-full" disabled={isLoadingData}>
                           View List <ExternalLink className="ml-2 h-4 w-4" />
                         </Button>
                       </Link>
@@ -298,7 +325,7 @@ export default function HomePage() {
             })}
           </div>
         ) : (
-          !isLoading && ( // Only show "No lists" if not loading and lists are empty
+          !isLoadingData && ( 
             <Card className="col-span-full text-center py-12 shadow">
               <CardContent className="flex flex-col items-center gap-4">
                 <AlertTriangle className="h-12 w-12 text-muted-foreground" />
@@ -326,10 +353,11 @@ export default function HomePage() {
           </div>
           <DialogFooter>
             <DialogClose asChild>
-                <Button type="button" variant="secondary">Cancel</Button>
+                <Button type="button" variant="secondary" disabled={isLoadingData}>Cancel</Button>
             </DialogClose>
-            <Button onClick={handleCreateNewList} className="bg-primary hover:bg-primary/90 text-primary-foreground" disabled={isLoading}>
-              {isLoading && newListName ? "Creating..." : "Create List"}
+            <Button onClick={handleCreateNewList} className="bg-primary hover:bg-primary/90 text-primary-foreground" disabled={isLoadingData || !newListName.trim()}>
+              {isLoadingData && newListName.trim() ? <Loader2 className="animate-spin mr-2 h-4 w-4"/> : null}
+              Create List
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -351,10 +379,11 @@ export default function HomePage() {
           </div>
           <DialogFooter>
             <DialogClose asChild>
-                <Button type="button" variant="secondary" onClick={() => { setIsEditListNameDialogOpen(false); setListToEditName(null); setEditingListName(""); }}>Cancel</Button>
+                <Button type="button" variant="secondary" onClick={() => { setIsEditListNameDialogOpen(false); setListToEditName(null); setEditingListName(""); }} disabled={isLoadingData}>Cancel</Button>
             </DialogClose>
-            <Button onClick={handleUpdateListName} className="bg-primary hover:bg-primary/90 text-primary-foreground" disabled={isLoading}>
-              {isLoading && listToEditName ? "Saving..." : "Save Name"}
+            <Button onClick={handleUpdateListName} className="bg-primary hover:bg-primary/90 text-primary-foreground" disabled={isLoadingData || !editingListName.trim()}>
+              {isLoadingData && listToEditName ? <Loader2 className="animate-spin mr-2 h-4 w-4"/> : null}
+              Save Name
             </Button>
           </DialogFooter>
         </DialogContent>

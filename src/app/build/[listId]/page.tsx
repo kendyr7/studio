@@ -4,7 +4,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { Button } from "@/components/ui/button";
-import { PlusCircle, AlertTriangle, ArrowLeft } from "lucide-react";
+import { PlusCircle, AlertTriangle, ArrowLeft, Loader2 } from "lucide-react";
 import { Header } from "@/components/layout/Header";
 import { PurchaseItemForm, type PurchaseItemFormData } from "@/components/buildmaster/PurchaseItemForm";
 import { PurchaseItemCard } from "@/components/buildmaster/PurchaseItemCard";
@@ -27,17 +27,15 @@ import {
   updateDoc,
   deleteDoc,
   getDocs,
-  // writeBatch, // Not used currently
   Timestamp,
-  // serverTimestamp, // Not used for item creation timestamp, relies on list's serverTimestamp
   orderBy,
   query,
 } from 'firebase/firestore';
+import { useAuth } from '@/app/providers';
 
-// Placeholder user ID. In a real app, this would come from Firebase Auth.
-const PLACEHOLDER_USER_ID = "default-user";
 
 export default function BuildListPage() {
+  const { user, loading: authLoading } = useAuth();
   const router = useRouter();
   const params = useParams();
   const listId = params.listId as string;
@@ -45,8 +43,8 @@ export default function BuildListPage() {
   const { toast } = useToast();
 
   const [currentList, setCurrentList] = useState<BuildList | undefined>(undefined);
-  const [isLoading, setIsLoading] = useState(true);
-  const [isOperating, setIsOperating] = useState(false); // For individual operations
+  const [isLoadingData, setIsLoadingData] = useState(true); // For data fetching
+  const [isOperating, setIsOperating] = useState(false); // For individual item operations
 
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<StoredPurchaseItem | undefined>(undefined);
@@ -59,6 +57,12 @@ export default function BuildListPage() {
   const [searchTerm, setSearchTerm] = useState<string>('');
   
   useEffect(() => {
+    if (authLoading) return;
+    if (!user) {
+      router.push('/auth');
+      return;
+    }
+
     if (!listId) {
       toast({ title: "Invalid List ID", description: "No list ID provided.", variant: "destructive" });
       router.push('/');
@@ -66,21 +70,22 @@ export default function BuildListPage() {
     }
 
     const fetchListAndItems = async () => {
-      setIsLoading(true);
+      if (!user) return;
+      setIsLoadingData(true);
       try {
         const listDocRef = doc(db, "buildLists", listId);
         const listDocSnap = await getDoc(listDocRef);
 
         if (listDocSnap.exists()) {
           const listData = listDocSnap.data();
-          if (listData.userId !== PLACEHOLDER_USER_ID) { // Basic security check
+          if (listData.userId !== user.uid) { 
             toast({ title: "Access Denied", description: "You do not have permission to view this list.", variant: "destructive" });
             router.push('/');
             return;
           }
 
           const itemsColRef = collection(db, "buildLists", listId, "items");
-          const itemsQuery = query(itemsColRef, orderBy("name")); // Default sort by name, can be adjusted
+          const itemsQuery = query(itemsColRef, orderBy("name")); 
           const itemsSnapshot = await getDocs(itemsQuery);
           const items = itemsSnapshot.docs.map(itemDoc => ({ id: itemDoc.id, ...itemDoc.data() } as StoredPurchaseItem));
           
@@ -101,7 +106,6 @@ export default function BuildListPage() {
                 listToSet.version = APP_DATA_VERSION;
              } catch (e) {
                 console.error("Failed to update list version in Firestore", e);
-                // Non-critical, proceed with loaded data
              }
           }
           setCurrentList(listToSet);
@@ -119,16 +123,16 @@ export default function BuildListPage() {
         });
         router.push('/');
       }
-      setIsLoading(false);
+      setIsLoadingData(false);
     };
 
     fetchListAndItems();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [listId, router]); // toast removed as it's stable
+  }, [listId, user, authLoading, router]);
 
 
   const handleAddItem = async (data: PurchaseItemFormData) => {
-    if (!currentList) return;
+    if (!currentList || !user) return;
     setIsOperating(true);
     const newItemData: Omit<StoredPurchaseItem, 'id'> = {
       name: data.name,
@@ -145,6 +149,7 @@ export default function BuildListPage() {
       const addedItemWithId: StoredPurchaseItem = { ...newItemData, id: docRef.id };
       setCurrentList(prev => prev ? { ...prev, items: [...prev.items, addedItemWithId].sort((a,b) => a.name.localeCompare(b.name)) } : undefined);
       toast({ title: "Item Added", description: `${data.name} has been added.` });
+      setIsFormOpen(false);
     } catch (error) {
       console.error("Error adding item:", error);
       toast({ 
@@ -157,7 +162,7 @@ export default function BuildListPage() {
   };
 
   const handleEditItem = async (data: PurchaseItemFormData) => {
-    if (!editingItem || !currentList) return;
+    if (!editingItem || !currentList || !user) return;
     setIsOperating(true);
     const itemDocRef = doc(db, "buildLists", currentList.id, "items", editingItem.id);
     const updatedItemData: Omit<StoredPurchaseItem, 'id'> = {
@@ -180,6 +185,7 @@ export default function BuildListPage() {
       });
       setEditingItem(undefined);
       toast({ title: "Item Updated", description: `${data.name} has been updated.` });
+      setIsFormOpen(false);
     } catch (error) {
       console.error("Error updating item:", error);
       toast({ 
@@ -192,7 +198,7 @@ export default function BuildListPage() {
   };
 
   const handleDeleteItem = async (itemId: string) => {
-    if (!currentList) return;
+    if (!currentList || !user) return;
     const itemToDelete = currentList.items.find(item => item.id === itemId);
     if (!itemToDelete) return;
     
@@ -224,7 +230,7 @@ export default function BuildListPage() {
   };
   
   const handleToggleIncludeInSpend = async (itemId: string, include: boolean) => {
-     if (!currentList) return;
+     if (!currentList || !user) return;
     setIsOperating(true);
     const itemDocRef = doc(db, "buildLists", currentList.id, "items", itemId);
     try {
@@ -248,7 +254,7 @@ export default function BuildListPage() {
   };
 
   const handleUpdateBudget = async (newTotalBudget: number) => {
-    if (!currentList) return;
+    if (!currentList || !user) return;
     setIsOperating(true);
     const listDocRef = doc(db, "buildLists", currentList.id);
     try {
@@ -267,7 +273,7 @@ export default function BuildListPage() {
   };
 
   const handleUpdateCurrency = async (newCurrencySymbol: string) => {
-    if (!currentList) return;
+    if (!currentList || !user) return;
     setIsOperating(true);
     const listDocRef = doc(db, "buildLists", currentList.id);
     try {
@@ -298,7 +304,7 @@ export default function BuildListPage() {
   };
 
   const handleLogPayment = useCallback(async (itemId: string, paymentAmount: number) => {
-    if (!currentList) return;
+    if (!currentList || !user) return;
     const itemToUpdate = currentList.items.find(item => item.id === itemId);
     if (!itemToUpdate) return;
 
@@ -321,10 +327,10 @@ export default function BuildListPage() {
         return;
     }
     
-    let currentTotalPaid = newIndividualPayments.reduce((sum, p) => sum + (p || 0), 0);
-    if (currentTotalPaid > itemToUpdate.totalPrice) {
-        const overPayment = currentTotalPaid - itemToUpdate.totalPrice;
-        const lastLoggedPaymentIndex = newIndividualPayments.lastIndexOf(paymentAmount);
+    let currentTotalPaidByThesePayments = newIndividualPayments.reduce((sum, p) => sum + (p || 0), 0);
+    if (currentTotalPaidByThesePayments > itemToUpdate.totalPrice) {
+        const overPayment = currentTotalPaidByThesePayments - itemToUpdate.totalPrice;
+        const lastLoggedPaymentIndex = newIndividualPayments.lastIndexOf(paymentAmount); 
         if (lastLoggedPaymentIndex !== -1) {
             newIndividualPayments[lastLoggedPaymentIndex] = Math.max(0, paymentAmount - overPayment);
         }
@@ -351,7 +357,7 @@ export default function BuildListPage() {
     }
     setIsOperating(false);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentList, toast]);
+  }, [currentList, user, toast]);
 
 
   const displayItems: DisplayPurchaseItem[] = useMemo(() => {
@@ -395,19 +401,33 @@ export default function BuildListPage() {
   }, [currentList, filterStatus, sortConfig, searchTerm]);
 
 
-  if (isLoading || !currentList) {
+  if (authLoading || isLoadingData || (!currentList && !authLoading && user)) {
     return (
         <div className="min-h-screen bg-background text-foreground flex flex-col items-center justify-center">
             <div className="flex items-center space-x-2">
-                <svg className="animate-spin h-8 w-8 text-primary" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                </svg>
+                <Loader2 className="animate-spin h-8 w-8 text-primary" />
                 <p className="text-xl font-headline">Loading Build List...</p>
             </div>
         </div>
     );
   }
+  
+  if (!user && !authLoading) { // Should be caught by useEffect redirect
+      return (
+        <div className="min-h-screen bg-background text-foreground flex flex-col items-center justify-center">
+             <p className="text-xl font-headline">Redirecting to login...</p>
+        </div>
+      );
+  }
+  
+  if (!currentList) { // Should mean listId was invalid or access denied and redirect happened
+    return (
+        <div className="min-h-screen bg-background text-foreground flex flex-col items-center justify-center">
+             <p className="text-xl font-headline">List not found or access denied.</p>
+        </div>
+      );
+  }
+
 
   return (
     <div className="min-h-screen bg-background text-foreground flex flex-col">
@@ -415,7 +435,7 @@ export default function BuildListPage() {
       <main className="container mx-auto px-4 py-8 flex-grow">
         <div className="mb-6">
             <Link href="/" passHref>
-                <Button variant="outline" size="sm">
+                <Button variant="outline" size="sm" disabled={isOperating}>
                     <ArrowLeft className="mr-2 h-4 w-4" />
                     Back to All Lists
                 </Button>
@@ -436,7 +456,7 @@ export default function BuildListPage() {
         <div className="mt-8 mb-6 flex justify-between items-center">
           <h2 className="text-3xl font-headline text-primary">My Components</h2>
           <Button onClick={openAddForm} variant="default" className="bg-accent hover:bg-accent/90 text-accent-foreground" disabled={isOperating}>
-            <PlusCircle className="mr-2 h-5 w-5" /> Add Item
+            {isOperating ? <Loader2 className="animate-spin mr-2 h-5 w-5"/> : <PlusCircle className="mr-2 h-5 w-5" />} Add Item
           </Button>
         </div>
 
@@ -465,7 +485,7 @@ export default function BuildListPage() {
             ))}
           </div>
         ) : (
-           !isOperating && ( // Only show if not operating and no items
+           !isOperating && ( 
             <Card className="col-span-full text-center py-12 shadow">
                 <CardContent className="flex flex-col items-center gap-4">
                 <AlertTriangle className="h-12 w-12 text-muted-foreground" />
@@ -478,12 +498,9 @@ export default function BuildListPage() {
            )
         )}
         
-        {isOperating && displayItems.length === 0 && ( // Show loader if operating and no items to display
+        {isOperating && displayItems.length === 0 && ( 
              <div className="col-span-full flex justify-center items-center py-12">
-                <svg className="animate-spin h-8 w-8 text-primary" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                </svg>
+                <Loader2 className="animate-spin h-8 w-8 text-primary" />
                  <p className="ml-2 text-xl font-headline">Processing...</p>
             </div>
         )}
@@ -497,7 +514,10 @@ export default function BuildListPage() {
 
         <PurchaseItemForm
           isOpen={isFormOpen}
-          onOpenChange={setIsFormOpen}
+          onOpenChange={(open) => {
+            setIsFormOpen(open);
+            if (!open) setEditingItem(undefined); // Clear editing item when dialog closes
+          }}
           onSubmit={editingItem ? handleEditItem : handleAddItem}
           initialData={editingItem}
           currencySymbol={currentList.budget.currencySymbol}
@@ -506,7 +526,10 @@ export default function BuildListPage() {
         {itemToLogPaymentFor && (
           <LogPaymentDialog
             isOpen={isLogPaymentModalOpen}
-            onOpenChange={setIsLogPaymentModalOpen}
+            onOpenChange={(open) => {
+                setIsLogPaymentModalOpen(open);
+                if (!open) setItemToLogPaymentFor(undefined); // Clear item when dialog closes
+            }}
             itemBeingPaid={itemToLogPaymentFor}
             currencySymbol={currentList.budget.currencySymbol}
             onSubmitLogPayment={handleLogPayment}

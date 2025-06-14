@@ -1,24 +1,23 @@
 
 import { initializeApp, getApps, type FirebaseApp } from "firebase/app";
 import { getFirestore, type Firestore } from "firebase/firestore";
-// import { getAuth, type Auth } from "firebase/auth"; // Uncomment if you plan to use Firebase Auth
+import { getAuth, type Auth } from "firebase/auth";
 
 // Your web app's Firebase configuration
 // IMPORTANT: Replace with your actual Firebase project configuration
 // It's recommended to store these in environment variables for security
 const firebaseConfig = {
-  apiKey: "AIzaSyA-Ox5V8CH7ZYJJJLUjw1Ir2plxnetDzY0",
-  authDomain: "buildmaster-27b4a.firebaseapp.com",
-  projectId: "buildmaster-27b4a",
-  storageBucket: "buildmaster-27b4a.firebasestorage.app",
-  messagingSenderId: "722399882640",
-  appId: "1:722399882640:web:6ac29c87dcb9945958d715",
-  // measurementId: "G-59SEZJECVM" // Optional
+  apiKey: "AIzaSyCCHd9ZjinR6xGWu47edvpCvbGDK1wsfKo",
+  authDomain: "buildmaster-jszoc.firebaseapp.com",
+  projectId: "buildmaster-jszoc",
+  storageBucket: "buildmaster-jszoc.firebasestorage.app",
+  messagingSenderId: "4228702072",
+  appId: "1:4228702072:web:2ac888b52d209f47e6328d"
 };
 
 let app: FirebaseApp;
 let db: Firestore;
-// let auth: Auth; // Uncomment if using Auth
+let auth: Auth;
 
 if (getApps().length === 0) {
   app = initializeApp(firebaseConfig);
@@ -27,20 +26,26 @@ if (getApps().length === 0) {
 }
 
 db = getFirestore(app);
-// auth = getAuth(app); // Uncomment if using Auth
+auth = getAuth(app);
 
-export { db /*, auth */ }; // Export auth if you uncomment its initialization
+export { db, auth };
 
 // Instructions for the user:
 // 1. Create a Firebase project at https://console.firebase.google.com/
 // 2. In your Firebase project, go to Project settings > General.
 // 3. Under "Your apps", click the Web icon (</>) to register a web app.
 // 4. Copy the firebaseConfig object provided and paste it above, replacing the placeholder.
-// 5. For security, it's best to use environment variables:
-//    - Create a .env.local file in your project root.
-//    - Add your Firebase config values like:
-//      NEXT_PUBLIC_FIREBASE_API_KEY=your_api_key
-//      NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=your_auth_domain
-//      ... and so on for all config properties.
-//    - Ensure .env.local is in your .gitignore file.
-// 6. If you plan to use Firebase Authentication, uncomment the auth-related lines in this file.
+// 5. Go to Firebase Console > Authentication > Sign-in method and enable "Email/Password".
+// 6. Update Firestore Security Rules to use `request.auth.uid` for secure data access. Example:
+//    rules_version = '2';
+//    service cloud.firestore {
+//      match /databases/{database}/documents {
+//        match /buildLists/{listId} {
+//          allow read, update, delete: if request.auth.uid == resource.data.userId;
+//          allow create: if request.auth.uid == request.resource.data.userId;
+//          match /items/{itemId} {
+//            allow read, write: if get(/databases/$(database)/documents/buildLists/$(listId)).data.userId == request.auth.uid;
+//          }
+//        }
+//      }
+//    }

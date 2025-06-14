@@ -3,6 +3,15 @@
 
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import useLocalStorage from '@/hooks/useLocalStorage';
+import { auth } from '@/lib/firebaseConfig';
+import type { User, AuthError } from 'firebase/auth';
+import { 
+  onAuthStateChanged, 
+  signInWithEmailAndPassword, 
+  createUserWithEmailAndPassword, 
+  signOut as firebaseSignOut 
+} from 'firebase/auth';
+import { useRouter } from 'next/navigation'; // For redirecting after auth changes
 
 export type Theme = 'dark' | 'theme-obsidian-dark' | 'theme-arctic-light';
 
@@ -32,8 +41,6 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   }, [setThemeInternal]);
 
   if (!isMounted) {
-    // To prevent hydration mismatch, render nothing or a loader until mounted
-    // For simplicity, returning children but applying class only after mount
     return <>{children}</>;
   }
 
@@ -52,11 +59,100 @@ export function useTheme() {
   return context;
 }
 
+// Auth Context
+interface AuthContextType {
+  user: User | null;
+  loading: boolean;
+  login: (email: string, pass: string) => Promise<void>;
+  signup: (email: string, pass: string) => Promise<void>;
+  logout: () => Promise<void>;
+  authError: string | null;
+  setAuthError: (error: string | null) => void;
+}
 
+const AuthContext = createContext<AuthContextType | undefined>(undefined);
+
+export function AuthProvider({ children }: { children: React.ReactNode }) {
+  const [user, setUser] = useState<User | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const router = useRouter();
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser);
+      setLoading(false);
+      if (currentUser && (window.location.pathname === '/auth' || window.location.pathname === '/auth/')) {
+         router.push('/'); // Redirect if logged in and on auth page
+      }
+    });
+    return () => unsubscribe();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // router removed from deps to prevent re-runs on navigation
+
+  const login = async (email: string, pass: string) => {
+    setLoading(true);
+    setAuthError(null);
+    try {
+      await signInWithEmailAndPassword(auth, email, pass);
+      // onAuthStateChanged will handle user state update and redirect
+    } catch (error) {
+      setAuthError((error as AuthError).message || 'Failed to login.');
+      console.error("Login error:", error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const signup = async (email: string, pass: string) => {
+    setLoading(true);
+    setAuthError(null);
+    try {
+      await createUserWithEmailAndPassword(auth, email, pass);
+      // onAuthStateChanged will handle user state update and redirect
+    } catch (error) {
+      setAuthError((error as AuthError).message || 'Failed to sign up.');
+      console.error("Signup error:", error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const logout = async () => {
+    setLoading(true);
+    setAuthError(null);
+    try {
+      await firebaseSignOut(auth);
+      // onAuthStateChanged will handle user state update
+      router.push('/auth'); // Redirect to auth page after logout
+    } catch (error) {
+      setAuthError((error as AuthError).message || 'Failed to logout.');
+      console.error("Logout error:", error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const value = { user, loading, login, signup, logout, authError, setAuthError };
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+}
+
+export function useAuth() {
+  const context = useContext(AuthContext);
+  if (context === undefined) {
+    throw new Error('useAuth must be used within an AuthProvider');
+  }
+  return context;
+}
+
+// App Providers
 export function AppProviders({ children }: { children: React.ReactNode }) {
   return (
-    <ThemeProvider>
-      {children}
-    </ThemeProvider>
+    <AuthProvider>
+      <ThemeProvider>
+        {children}
+      </ThemeProvider>
+    </AuthProvider>
   );
 }
