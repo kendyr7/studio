@@ -4,10 +4,10 @@
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { Button } from "@/components/ui/button";
-import { PlusCircle, Trash2, ExternalLink, AlertTriangle, Home } from "lucide-react";
+import { PlusCircle, Trash2, ExternalLink, AlertTriangle, Home, Edit } from "lucide-react"; // Added Edit icon
 import { Header } from "@/components/layout/Header";
 import useLocalStorage from "@/hooks/useLocalStorage";
-import type { AllBuilds, BuildList, BuildListData, StoredPurchaseItem as OldStoredPurchaseItem, BudgetData as OldBudgetData } from "@/types"; // Added Old types for migration
+import type { AllBuilds, BuildList, BuildListData, StoredPurchaseItem as OldStoredPurchaseItem, BudgetData as OldBudgetData } from "@/types";
 import { APP_DATA_VERSION, LOCAL_STORAGE_KEY_ALL_BUILDS, OLD_LOCAL_STORAGE_KEY } from "@/lib/constants";
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -32,15 +32,13 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
-import { formatCurrency } from '@/lib/utils';
+import { formatCurrency, enrichPurchaseItem } from '@/lib/utils'; // Added enrichPurchaseItem
 
-// Define OldAppData type for migration
 interface OldAppData {
   version: string;
   budget: OldBudgetData;
   items: OldStoredPurchaseItem[];
 }
-
 
 const initialAllBuilds: AllBuilds = {
   lists: [],
@@ -54,19 +52,22 @@ export default function HomePage() {
   const [newListName, setNewListName] = useState("");
   const [listToDelete, setListToDelete] = useState<BuildList | null>(null);
   
+  const [isEditListNameDialogOpen, setIsEditListNameDialogOpen] = useState(false);
+  const [listToEditName, setListToEditName] = useState<BuildList | null>(null);
+  const [editingListName, setEditingListName] = useState("");
+  
   const [isClient, setIsClient] = useState(false);
 
   useEffect(() => {
     setIsClient(true);
     
-    // Migration logic
     const oldDataRaw = typeof window !== 'undefined' ? window.localStorage.getItem(OLD_LOCAL_STORAGE_KEY) : null;
     const newDataRaw = typeof window !== 'undefined' ? window.localStorage.getItem(LOCAL_STORAGE_KEY_ALL_BUILDS) : null;
 
-    if (oldDataRaw && !newDataRaw) { // Only migrate if old data exists and new data doesn't
+    if (oldDataRaw && !newDataRaw) {
       try {
         const oldData: OldAppData = JSON.parse(oldDataRaw);
-        if (oldData && oldData.items && oldData.budget) { // Basic check for old data structure
+        if (oldData && oldData.items && oldData.budget) {
           
           const migratedItems = oldData.items.map(item => {
             const oldItem = item as any;
@@ -117,7 +118,7 @@ export default function HomePage() {
       }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [toast]); // setAllBuilds removed from deps to prevent loop on init if initialAllBuilds is empty
+  }, [toast]);
 
   const handleCreateNewList = () => {
     if (!newListName.trim()) {
@@ -149,6 +150,29 @@ export default function HomePage() {
     }
     setListToDelete(null);
   };
+
+  const openEditListNameDialog = (list: BuildList) => {
+    setListToEditName(list);
+    setEditingListName(list.name);
+    setIsEditListNameDialogOpen(true);
+  };
+
+  const handleUpdateListName = () => {
+    if (!listToEditName || !editingListName.trim()) {
+      toast({ title: "Error", description: "List name cannot be empty.", variant: "destructive" });
+      return;
+    }
+    setAllBuilds(prev => ({
+      ...prev,
+      lists: prev.lists.map(l =>
+        l.id === listToEditName.id ? { ...l, name: editingListName.trim() } : l
+      ),
+    }));
+    toast({ title: "List Updated", description: `List name changed to "${editingListName.trim()}".` });
+    setIsEditListNameDialogOpen(false);
+    setListToEditName(null);
+    setEditingListName("");
+  };
   
   if (!isClient) {
      return (
@@ -177,46 +201,61 @@ export default function HomePage() {
 
         {allBuilds.lists.length > 0 ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {allBuilds.lists.map(list => (
-              <Card key={list.id} className="flex flex-col shadow-lg hover:shadow-primary/30 transition-shadow duration-300 ease-in-out">
-                <CardHeader>
-                  <CardTitle className="font-headline text-xl">{list.name}</CardTitle>
-                  <CardDescription>Created: {new Date(list.createdAt).toLocaleDateString()}</CardDescription>
-                </CardHeader>
-                <CardContent className="flex-grow">
-                  <p>{list.items.length} item(s)</p>
-                  <p>Budget: {formatCurrency(list.budget.totalBudget, list.budget.currencySymbol)}</p>
-                </CardContent>
-                <CardFooter className="flex justify-between gap-2 border-t pt-4">
-                  <AlertDialog>
-                    <AlertDialogTrigger asChild>
-                      <Button variant="destructive" size="sm" onClick={(e) => { e.stopPropagation(); setListToDelete(list); }}>
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
-                    </AlertDialogTrigger>
-                    {listToDelete && listToDelete.id === list.id && (
-                       <AlertDialogContent>
-                        <AlertDialogHeader>
-                          <AlertDialogTitle>Are you sure?</AlertDialogTitle>
-                          <AlertDialogDescription>
-                            This action will permanently delete the build list "{listToDelete.name}" and all its items. This cannot be undone.
-                          </AlertDialogDescription>
-                        </AlertDialogHeader>
-                        <AlertDialogFooter>
-                          <AlertDialogCancel onClick={() => setListToDelete(null)}>Cancel</AlertDialogCancel>
-                          <AlertDialogAction onClick={() => handleDeleteList(listToDelete.id)}>Delete List</AlertDialogAction>
-                        </AlertDialogFooter>
-                      </AlertDialogContent>
-                    )}
-                  </AlertDialog>
-                  <Link href={`/build/${list.id}`} passHref>
-                    <Button variant="outline" size="sm" className="flex-grow">
-                      View List <ExternalLink className="ml-2 h-4 w-4" />
-                    </Button>
-                  </Link>
-                </CardFooter>
-              </Card>
-            ))}
+            {allBuilds.lists.map(list => {
+              const enrichedItems = list.items.map(item => enrichPurchaseItem(item));
+              const totalPaidForList = enrichedItems.reduce((sum, item) => sum + item.paidAmount, 0);
+              const totalRemainingForList = enrichedItems.reduce((sum, item) => sum + item.remainingBalance, 0);
+
+              return (
+                <Card key={list.id} className="flex flex-col shadow-lg hover:shadow-primary/30 transition-shadow duration-300 ease-in-out">
+                  <CardHeader>
+                    <CardTitle className="font-headline text-xl">{list.name}</CardTitle>
+                    <CardDescription>Created: {new Date(list.createdAt).toLocaleDateString()}</CardDescription>
+                  </CardHeader>
+                  <CardContent className="flex-grow space-y-1">
+                    <p>Items: {list.items.length}</p>
+                    <p>Budget: {formatCurrency(list.budget.totalBudget, list.budget.currencySymbol)}</p>
+                    <p className="text-sm text-green-500">Total Paid: {formatCurrency(totalPaidForList, list.budget.currencySymbol)}</p>
+                    <p className="text-sm text-orange-500">Total Remaining: {formatCurrency(totalRemainingForList, list.budget.currencySymbol)}</p>
+                  </CardContent>
+                  <CardFooter className="border-t pt-4">
+                    <div className="flex w-full justify-between items-center gap-2">
+                      <div className="flex gap-2">
+                        <Button variant="outline" size="icon" onClick={() => openEditListNameDialog(list)} aria-label="Edit list name">
+                          <Edit className="h-4 w-4" />
+                        </Button>
+                        <AlertDialog>
+                          <AlertDialogTrigger asChild>
+                            <Button variant="destructive" size="icon" onClick={(e) => { e.stopPropagation(); setListToDelete(list); }} aria-label="Delete list">
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </AlertDialogTrigger>
+                          {listToDelete && listToDelete.id === list.id && (
+                            <AlertDialogContent>
+                              <AlertDialogHeader>
+                                <AlertDialogTitle>Are you sure?</AlertDialogTitle>
+                                <AlertDialogDescription>
+                                  This action will permanently delete the build list "{listToDelete.name}" and all its items. This cannot be undone.
+                                </AlertDialogDescription>
+                              </AlertDialogHeader>
+                              <AlertDialogFooter>
+                                <AlertDialogCancel onClick={() => setListToDelete(null)}>Cancel</AlertDialogCancel>
+                                <AlertDialogAction onClick={() => handleDeleteList(listToDelete.id)}>Delete List</AlertDialogAction>
+                              </AlertDialogFooter>
+                            </AlertDialogContent>
+                          )}
+                        </AlertDialog>
+                      </div>
+                      <Link href={`/build/${list.id}`} passHref className="flex-grow ml-2">
+                        <Button variant="outline" size="sm" className="w-full">
+                          View List <ExternalLink className="ml-2 h-4 w-4" />
+                        </Button>
+                      </Link>
+                    </div>
+                  </CardFooter>
+                </Card>
+              );
+            })}
           </div>
         ) : (
           <Card className="col-span-full text-center py-12 shadow">
@@ -251,6 +290,29 @@ export default function HomePage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <Dialog open={isEditListNameDialogOpen} onOpenChange={setIsEditListNameDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Edit List Name</DialogTitle>
+            <DialogDescription>Enter a new name for this build list.</DialogDescription>
+          </DialogHeader>
+          <div className="py-4">
+            <Input
+              placeholder="e.g., Upgraded Streaming PC"
+              value={editingListName}
+              onChange={(e) => setEditingListName(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleUpdateListName()}
+            />
+          </div>
+          <DialogFooter>
+            <DialogClose asChild>
+                <Button type="button" variant="secondary" onClick={() => { setIsEditListNameDialogOpen(false); setListToEditName(null); setEditingListName(""); }}>Cancel</Button>
+            </DialogClose>
+            <Button onClick={handleUpdateListName} className="bg-primary hover:bg-primary/90 text-primary-foreground">Save Name</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       
       <footer className="text-center py-6 border-t border-border text-sm text-muted-foreground">
         BuildMaster &copy; {new Date().getFullYear()} - Your Gaming PC Purchase Tracker
@@ -258,3 +320,4 @@ export default function HomePage() {
     </div>
   );
 }
+
