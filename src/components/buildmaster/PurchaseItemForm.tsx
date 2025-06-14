@@ -1,3 +1,4 @@
+
 "use client";
 
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -27,22 +28,25 @@ import {
   DialogClose,
 } from "@/components/ui/dialog";
 import { PlusCircle, Edit } from "lucide-react";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { CalendarIcon } from "lucide-react";
-import { Calendar } from "@/components/ui/calendar";
-import { format, parseISO } from "date-fns";
-import { cn } from "@/lib/utils";
 
 const purchaseItemSchema = z.object({
   name: z.string().min(1, { message: "Product name is required." }).max(100),
   totalPrice: z.coerce.number().min(0, { message: "Total price must be non-negative." }),
   paidAmount: z.coerce.number().min(0, { message: "Paid amount must be non-negative." }),
+  numberOfPayments: z.coerce.number().int().min(0, { message: "Number of payments must be non-negative."}).default(1),
   notes: z.string().max(500).optional(),
-  estimatedCompletionDate: z.date().optional(),
   includeInSpendCalculation: z.boolean().default(true),
 }).refine(data => data.paidAmount <= data.totalPrice, {
   message: "Paid amount cannot exceed total price.",
   path: ["paidAmount"],
+}).refine(data => {
+  if (data.totalPrice > 0 && data.numberOfPayments <= 0) {
+    return false;
+  }
+  return true;
+}, {
+  message: "Number of payments must be at least 1 if total price is greater than 0.",
+  path: ["numberOfPayments"],
 });
 
 export type PurchaseItemFormData = z.infer<typeof purchaseItemSchema>;
@@ -51,7 +55,7 @@ interface PurchaseItemFormProps {
   isOpen: boolean;
   onOpenChange: (isOpen: boolean) => void;
   onSubmit: (data: PurchaseItemFormData) => void;
-  initialData?: StoredPurchaseItem;
+  initialData?: StoredPurchaseItem; // StoredPurchaseItem already includes numberOfPayments and paymentsMade
   currencySymbol?: string;
 }
 
@@ -66,29 +70,74 @@ export function PurchaseItemForm({
     resolver: zodResolver(purchaseItemSchema),
     defaultValues: initialData
       ? {
-          ...initialData,
-          estimatedCompletionDate: initialData.estimatedCompletionDate
-            ? parseISO(initialData.estimatedCompletionDate)
-            : undefined,
+          name: initialData.name,
+          totalPrice: initialData.totalPrice,
+          paidAmount: initialData.paidAmount,
+          numberOfPayments: initialData.numberOfPayments,
+          notes: initialData.notes || "",
+          includeInSpendCalculation: initialData.includeInSpendCalculation,
         }
       : {
           name: "",
           totalPrice: 0,
           paidAmount: 0,
+          numberOfPayments: 1,
           notes: "",
-          estimatedCompletionDate: undefined,
           includeInSpendCalculation: true,
         },
   });
 
+  // When initialData changes, reset the form
+  React.useEffect(() => {
+    if (initialData) {
+      form.reset({
+        name: initialData.name,
+        totalPrice: initialData.totalPrice,
+        paidAmount: initialData.paidAmount,
+        numberOfPayments: initialData.numberOfPayments,
+        notes: initialData.notes || "",
+        includeInSpendCalculation: initialData.includeInSpendCalculation,
+      });
+    } else {
+      form.reset({
+        name: "",
+        totalPrice: 0,
+        paidAmount: 0,
+        numberOfPayments: 1,
+        notes: "",
+        includeInSpendCalculation: true,
+      });
+    }
+  }, [initialData, form]);
+
+
   const handleFormSubmit = (data: PurchaseItemFormData) => {
     onSubmit(data);
-    form.reset();
+    // form.reset(); // Reset is handled by useEffect or onOpenChange
     onOpenChange(false);
   };
 
   return (
-    <Dialog open={isOpen} onOpenChange={onOpenChange}>
+    <Dialog open={isOpen} onOpenChange={(open) => {
+      onOpenChange(open);
+      if (!open) { // Reset form when dialog closes if not submitting
+        form.reset(initialData ? {
+             name: initialData.name,
+            totalPrice: initialData.totalPrice,
+            paidAmount: initialData.paidAmount,
+            numberOfPayments: initialData.numberOfPayments,
+            notes: initialData.notes || "",
+            includeInSpendCalculation: initialData.includeInSpendCalculation,
+        } : {
+            name: "",
+            totalPrice: 0,
+            paidAmount: 0,
+            numberOfPayments: 1,
+            notes: "",
+            includeInSpendCalculation: true,
+        });
+      }
+    }}>
       <DialogContent className="sm:max-w-[480px] bg-card text-card-foreground">
         <DialogHeader>
           <DialogTitle className="font-headline text-2xl">
@@ -143,39 +192,13 @@ export function PurchaseItemForm({
             </div>
             <FormField
               control={form.control}
-              name="estimatedCompletionDate"
+              name="numberOfPayments"
               render={({ field }) => (
-                <FormItem className="flex flex-col">
-                  <FormLabel>Est. Payment Completion</FormLabel>
-                  <Popover>
-                    <PopoverTrigger asChild>
-                      <FormControl>
-                        <Button
-                          variant={"outline"}
-                          className={cn(
-                            "w-full pl-3 text-left font-normal",
-                            !field.value && "text-muted-foreground"
-                          )}
-                        >
-                          {field.value ? (
-                            format(field.value, "PPP")
-                          ) : (
-                            <span>Pick a date</span>
-                          )}
-                          <CalendarIcon className="ml-auto h-4 w-4 opacity-50" />
-                        </Button>
-                      </FormControl>
-                    </PopoverTrigger>
-                    <PopoverContent className="w-auto p-0" align="start">
-                      <Calendar
-                        mode="single"
-                        selected={field.value}
-                        onSelect={field.onChange}
-                        disabled={(date) => date < new Date(new Date().setHours(0,0,0,0))}
-                        initialFocus
-                      />
-                    </PopoverContent>
-                  </Popover>
+                <FormItem>
+                  <FormLabel>Number of Payments</FormLabel>
+                  <FormControl>
+                    <Input type="number" step="1" placeholder="e.g., 3" {...field} />
+                  </FormControl>
                   <FormMessage />
                 </FormItem>
               )}
@@ -187,7 +210,7 @@ export function PurchaseItemForm({
                 <FormItem>
                   <FormLabel>Notes (Optional)</FormLabel>
                   <FormControl>
-                    <Textarea placeholder="e.g., Waiting for sale, alternative: RX 7900 XTX" {...field} />
+                    <Textarea placeholder="e.g., Purchased with a 3-month plan" {...field} />
                   </FormControl>
                   <FormMessage />
                 </FormItem>

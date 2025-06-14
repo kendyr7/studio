@@ -1,3 +1,4 @@
+
 export type ItemStatus = 'Pending' | 'Partially Paid' | 'Paid';
 
 export interface StoredPurchaseItem {
@@ -6,7 +7,8 @@ export interface StoredPurchaseItem {
   totalPrice: number;
   paidAmount: number;
   notes?: string;
-  estimatedCompletionDate?: string; // ISO string date
+  numberOfPayments: number; // Added
+  paymentsMade: number;    // Added
   includeInSpendCalculation: boolean;
 }
 
@@ -26,7 +28,7 @@ export interface AppData {
   items: StoredPurchaseItem[];
 }
 
-export type SortableField = 'name' | 'totalPrice' | 'paidAmount' | 'status' | 'estimatedCompletionDate';
+export type SortableField = 'name' | 'totalPrice' | 'paidAmount' | 'status'; // Removed 'estimatedCompletionDate'
 export type SortDirection = 'asc' | 'desc';
 
 export interface SortConfig {

@@ -13,9 +13,8 @@ import { SortFilterControls } from "@/components/buildmaster/SortFilterControls"
 import useLocalStorage from "@/hooks/useLocalStorage";
 import type { StoredPurchaseItem, PurchaseItem as DisplayPurchaseItem, BudgetData, AppData, SortConfig, FilterStatus, SortableField, ItemStatus } from "@/types";
 import { APP_DATA_VERSION, LOCAL_STORAGE_KEY } from "@/lib/constants";
-import { enrichPurchaseItem, calculateItemStatus } from "@/lib/utils";
+import { enrichPurchaseItem } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
-import { format, parseISO } from 'date-fns';
 import { Card, CardContent } from "@/components/ui/card";
 
 const initialAppData: AppData = {
@@ -37,11 +36,8 @@ export default function BuildMasterPage() {
   const [isClient, setIsClient] = useState(false);
   useEffect(() => {
     setIsClient(true);
-    // Version check / migration logic could go here
     if (appData.version !== APP_DATA_VERSION) {
-        // For now, just log. Could implement migration or reset.
         console.warn(`Data version mismatch. Expected ${APP_DATA_VERSION}, found ${appData.version}. Consider migrating data.`);
-        // Example: setAppData({...initialAppData, budget: appData.budget }); // Keep budget, reset items
     }
   }, [appData.version]);
 
@@ -50,7 +46,8 @@ export default function BuildMasterPage() {
     const newItem: StoredPurchaseItem = {
       id: crypto.randomUUID(),
       ...data,
-      estimatedCompletionDate: data.estimatedCompletionDate ? format(data.estimatedCompletionDate, 'yyyy-MM-dd') : undefined,
+      paymentsMade: 0, // Initialize paymentsMade for new items
+      numberOfPayments: data.numberOfPayments || (data.totalPrice > 0 ? 1 : 0), // Ensure numberOfPayments is set
     };
     setAppData(prev => ({ ...prev, items: [...prev.items, newItem] }));
     toast({ title: "Item Added", description: `${data.name} has been added to your list.` });
@@ -61,7 +58,9 @@ export default function BuildMasterPage() {
     const updatedItem: StoredPurchaseItem = {
       ...editingItem,
       ...data,
-      estimatedCompletionDate: data.estimatedCompletionDate ? format(data.estimatedCompletionDate, 'yyyy-MM-dd') : undefined,
+      numberOfPayments: data.numberOfPayments || (data.totalPrice > 0 ? 1 : 0),
+      // paymentsMade is preserved from editingItem unless it exceeds new numberOfPayments
+      paymentsMade: Math.min(editingItem.paymentsMade, data.numberOfPayments || (data.totalPrice > 0 ? 1 : 0))
     };
     setAppData(prev => ({
       ...prev,
@@ -115,6 +114,38 @@ export default function BuildMasterPage() {
     }));
   };
 
+  const handleLogPayment = useCallback((itemId: string) => {
+    setAppData(prev => {
+      const updatedItems = prev.items.map(item => {
+        if (item.id === itemId) {
+          if (item.paymentsMade < item.numberOfPayments && item.numberOfPayments > 0 && item.paidAmount < item.totalPrice) {
+            const newPaymentsMade = item.paymentsMade + 1;
+            let newPaidAmount;
+
+            if (newPaymentsMade === item.numberOfPayments) {
+              newPaidAmount = item.totalPrice;
+            } else {
+              const paymentPerInstallment = item.totalPrice > 0 && item.numberOfPayments > 0 ? item.totalPrice / item.numberOfPayments : 0;
+              newPaidAmount = Math.min(item.totalPrice, item.paidAmount + paymentPerInstallment);
+            }
+            
+            return { 
+              ...item, 
+              paymentsMade: newPaymentsMade, 
+              paidAmount: parseFloat(newPaidAmount.toFixed(2))
+            };
+          }
+        }
+        return item;
+      });
+      return { ...prev, items: updatedItems };
+    });
+    const itemData = appData.items.find(i => i.id === itemId);
+    if (itemData) {
+      toast({ title: "Payment Logged", description: `Payment logged for ${itemData.name}.` });
+    }
+  }, [setAppData, appData.items, toast]);
+
   const displayItems: DisplayPurchaseItem[] = useMemo(() => {
     let items = appData.items.map(enrichPurchaseItem);
 
@@ -130,14 +161,7 @@ export default function BuildMasterPage() {
         const statusOrder: Record<ItemStatus, number> = { 'Pending': 1, 'Partially Paid': 2, 'Paid': 3 };
         valA = statusOrder[a.status];
         valB = statusOrder[b.status];
-      } else if (sortConfig.field === 'estimatedCompletionDate') {
-        // Handle undefined dates: sort them to the end
-        const dateA = a.estimatedCompletionDate ? parseISO(a.estimatedCompletionDate).getTime() : Infinity;
-        const dateB = b.estimatedCompletionDate ? parseISO(b.estimatedCompletionDate).getTime() : Infinity;
-        valA = dateA;
-        valB = dateB;
       }
-
 
       let comparison = 0;
       if (typeof valA === 'string' && typeof valB === 'string') {
@@ -154,7 +178,6 @@ export default function BuildMasterPage() {
 
 
   if (!isClient) {
-    // Render a loading state or null during SSR to avoid hydration mismatch
     return (
         <div className="min-h-screen bg-background text-foreground flex flex-col items-center justify-center">
             <div className="flex items-center space-x-2">
@@ -202,6 +225,7 @@ export default function BuildMasterPage() {
                 onEdit={() => openEditForm(appData.items.find(i => i.id === item.id)!)}
                 onDelete={handleDeleteItem}
                 onToggleIncludeInSpend={handleToggleIncludeInSpend}
+                onLogPayment={handleLogPayment}
                 currencySymbol={appData.budget.currencySymbol}
               />
             ))}

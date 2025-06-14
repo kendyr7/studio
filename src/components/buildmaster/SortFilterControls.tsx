@@ -1,6 +1,7 @@
+
 "use client";
 
-import type { SortConfig, FilterStatus, ItemStatus, SortableField } from "@/types";
+import type { SortConfig, FilterStatus, SortableField } from "@/types";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { ArrowDownUp, Filter } from "lucide-react";
@@ -8,7 +9,7 @@ import { ArrowDownUp, Filter } from "lucide-react";
 interface SortFilterControlsProps {
   sortConfig: SortConfig;
   filterStatus: FilterStatus;
-  onSortChange: (field: SortableField) => void; // Toggles direction internally or resets to 'asc'
+  onSortChange: (field: SortableField) => void;
   onFilterChange: (status: FilterStatus) => void;
 }
 
@@ -17,7 +18,7 @@ const sortableFields: { value: SortableField; label: string }[] = [
   { value: "totalPrice", label: "Total Price" },
   { value: "paidAmount", label: "Amount Paid" },
   { value: "status", label: "Status" },
-  { value: "estimatedCompletionDate", label: "Est. Completion" },
+  // { value: "estimatedCompletionDate", label: "Est. Completion" }, // Removed
 ];
 
 const filterStatuses: { value: FilterStatus; label: string }[] = [
