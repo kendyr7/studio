@@ -1,6 +1,7 @@
 
 "use client";
 
+import Link from 'next/link';
 import { LogoIcon } from '@/components/icons/LogoIcon';
 import { Button } from "@/components/ui/button";
 import {
@@ -24,9 +25,11 @@ export function Header() {
   return (
     <header className="py-6 mb-8 border-b border-border">
       <div className="container mx-auto flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <LogoIcon className="h-8 w-auto" />
-        </div>
+        <Link href="/" aria-label="Go to Homepage">
+          <div className="flex items-center gap-3 cursor-pointer">
+            <LogoIcon className="h-8 w-auto" />
+          </div>
+        </Link>
         
         <DropdownMenu>
           <DropdownMenuTrigger asChild>

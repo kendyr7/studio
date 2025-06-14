@@ -1,269 +1,157 @@
 
 "use client";
 
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect } from 'react';
+import Link from 'next/link';
 import { Button } from "@/components/ui/button";
-import { PlusCircle, AlertTriangle, Search } from "lucide-react";
+import { PlusCircle, Trash2, ExternalLink, AlertTriangle, Home } from "lucide-react";
 import { Header } from "@/components/layout/Header";
-import { PurchaseItemForm, type PurchaseItemFormData } from "@/components/buildmaster/PurchaseItemForm";
-import { PurchaseItemCard } from "@/components/buildmaster/PurchaseItemCard";
-import { BudgetManager } from "@/components/buildmaster/BudgetManager";
-import { SummaryDashboard } from "@/components/buildmaster/SummaryDashboard";
-import { SortFilterControls } from "@/components/buildmaster/SortFilterControls";
-import { LogPaymentDialog } from "@/components/buildmaster/LogPaymentDialog";
 import useLocalStorage from "@/hooks/useLocalStorage";
-import type { StoredPurchaseItem, PurchaseItem as DisplayPurchaseItem, BudgetData, AppData, SortConfig, FilterStatus, SortableField, ItemStatus } from "@/types";
-import { APP_DATA_VERSION, LOCAL_STORAGE_KEY } from "@/lib/constants";
-import { enrichPurchaseItem } from "@/lib/utils";
+import type { AllBuilds, BuildList, BuildListData, StoredPurchaseItem as OldStoredPurchaseItem, BudgetData as OldBudgetData } from "@/types"; // Added Old types for migration
+import { APP_DATA_VERSION, LOCAL_STORAGE_KEY_ALL_BUILDS, OLD_LOCAL_STORAGE_KEY } from "@/lib/constants";
 import { useToast } from "@/hooks/use-toast";
-import { Card, CardContent } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+  DialogDescription,
+  DialogClose,
+} from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
+import { Input } from "@/components/ui/input";
+import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
+import { formatCurrency } from '@/lib/utils';
 
-const initialAppData: AppData = {
-  version: APP_DATA_VERSION,
-  budget: { totalBudget: 1500, currencySymbol: "$" },
-  items: [],
+// Define OldAppData type for migration
+interface OldAppData {
+  version: string;
+  budget: OldBudgetData;
+  items: OldStoredPurchaseItem[];
+}
+
+
+const initialAllBuilds: AllBuilds = {
+  lists: [],
 };
 
-export default function BuildMasterPage() {
-  const [appData, setAppData] = useLocalStorage<AppData>(LOCAL_STORAGE_KEY, initialAppData);
+export default function HomePage() {
+  const [allBuilds, setAllBuilds] = useLocalStorage<AllBuilds>(LOCAL_STORAGE_KEY_ALL_BUILDS, initialAllBuilds);
   const { toast } = useToast();
 
-  const [isFormOpen, setIsFormOpen] = useState(false);
-  const [editingItem, setEditingItem] = useState<StoredPurchaseItem | undefined>(undefined);
-  
-  const [isLogPaymentModalOpen, setIsLogPaymentModalOpen] = useState(false);
-  const [itemToLogPaymentFor, setItemToLogPaymentFor] = useState<DisplayPurchaseItem | undefined>(undefined);
-
-  const [sortConfig, setSortConfig] = useState<SortConfig>({ field: 'name', direction: 'asc' });
-  const [filterStatus, setFilterStatus] = useState<FilterStatus>('All');
-  const [searchTerm, setSearchTerm] = useState<string>('');
+  const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
+  const [newListName, setNewListName] = useState("");
+  const [listToDelete, setListToDelete] = useState<BuildList | null>(null);
   
   const [isClient, setIsClient] = useState(false);
 
   useEffect(() => {
     setIsClient(true);
-    if (appData.version !== APP_DATA_VERSION) {
-        console.warn(`Data version mismatch. Expected ${APP_DATA_VERSION}, found ${appData.version}. Consider migrating data.`);
-    }
-
-    setAppData(prev => {
-      const migratedItems = prev.items.map(item => {
-        const oldItem = item as any; 
-        let individualPayments = item.individualPayments;
-        let numberOfPayments = item.numberOfPayments ?? 1;
-
-        if (!individualPayments && typeof oldItem.paidAmount !== 'undefined') {
-          individualPayments = Array(numberOfPayments).fill(0);
-          if (oldItem.paymentsMade === 1 && numberOfPayments === 1 && oldItem.paidAmount > 0) {
-            individualPayments[0] = oldItem.paidAmount;
-          }
-        } else if (individualPayments && individualPayments.length !== numberOfPayments) {
-            const correctedPayments = Array(numberOfPayments).fill(0);
-            for(let i=0; i< Math.min(individualPayments.length, correctedPayments.length); i++) {
-                correctedPayments[i] = individualPayments[i];
-            }
-            individualPayments = correctedPayments;
-        } else if (!individualPayments) {
-            individualPayments = Array(numberOfPayments).fill(0);
-        }
-        
-        return {
-            ...item,
-            numberOfPayments,
-            individualPayments,
-            paidAmount: undefined, 
-            paymentsMade: undefined, 
-          } as StoredPurchaseItem;
-      });
-      if (JSON.stringify(prev.items) !== JSON.stringify(migratedItems)) {
-        return { ...prev, items: migratedItems };
-      }
-      return prev;
-    });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [appData.version]);
-
-
-  const handleAddItem = (data: PurchaseItemFormData) => {
-    const newItem: StoredPurchaseItem = {
-      id: crypto.randomUUID(),
-      name: data.name,
-      totalPrice: data.totalPrice,
-      numberOfPayments: data.numberOfPayments,
-      individualPayments: data.individualPayments.map(p => p || 0),
-      notes: data.notes,
-      includeInSpendCalculation: data.includeInSpendCalculation,
-    };
-    setAppData(prev => ({ ...prev, items: [...prev.items, newItem] }));
-    toast({ title: "Item Added", description: `${data.name} has been added to your list.` });
-  };
-
-  const handleEditItem = (data: PurchaseItemFormData) => {
-    if (!editingItem) return;
-    const updatedItem: StoredPurchaseItem = {
-      ...editingItem,
-      name: data.name,
-      totalPrice: data.totalPrice,
-      numberOfPayments: data.numberOfPayments,
-      individualPayments: data.individualPayments.map(p => p || 0),
-      notes: data.notes,
-      includeInSpendCalculation: data.includeInSpendCalculation,
-    };
-    setAppData(prev => ({
-      ...prev,
-      items: prev.items.map(item => item.id === editingItem.id ? updatedItem : item),
-    }));
-    setEditingItem(undefined);
-    toast({ title: "Item Updated", description: `${data.name} has been updated.` });
-  };
-
-  const handleDeleteItem = (itemId: string) => {
-    const itemToDelete = appData.items.find(item => item.id === itemId);
-    setAppData(prev => ({ ...prev, items: prev.items.filter(item => item.id !== itemId) }));
-    if (itemToDelete) {
-        toast({ title: "Item Deleted", description: `${itemToDelete.name} has been removed.`, variant: "destructive" });
-    }
-  };
-
-  const openEditForm = (item: StoredPurchaseItem) => {
-    setEditingItem(item);
-    setIsFormOpen(true);
-  };
-
-  const openAddForm = () => {
-    setEditingItem(undefined);
-    setIsFormOpen(true);
-  };
-  
-  const handleToggleIncludeInSpend = (itemId: string, include: boolean) => {
-    setAppData(prev => ({
-      ...prev,
-      items: prev.items.map(item =>
-        item.id === itemId ? { ...item, includeInSpendCalculation: include } : item
-      ),
-    }));
-  };
-
-  const handleUpdateBudget = (newTotalBudget: number) => {
-    setAppData(prev => ({ ...prev, budget: { ...prev.budget, totalBudget: newTotalBudget } }));
-    toast({ title: "Budget Updated", description: `Total budget set to ${appData.budget.currencySymbol}${newTotalBudget.toFixed(2)}.` });
-  };
-
-  const handleUpdateCurrency = (newCurrencySymbol: string) => {
-    setAppData(prev => ({ ...prev, budget: { ...prev.budget, currencySymbol: newCurrencySymbol } }));
-    toast({ title: "Currency Updated", description: `Currency symbol set to ${newCurrencySymbol}.` });
-  };
-
-  const handleSortChange = (field: SortableField) => {
-    setSortConfig(current => ({
-      field,
-      direction: current.field === field && current.direction === 'asc' ? 'desc' : 'asc',
-    }));
-  };
-  
-  const openLogPaymentModal = (item: DisplayPurchaseItem) => {
-    setItemToLogPaymentFor(item);
-    setIsLogPaymentModalOpen(true);
-  };
-
-  const handleLogPayment = useCallback((itemId: string, paymentAmount: number) => {
-    setAppData(prev => {
-      const updatedItems = prev.items.map(item => {
-        if (item.id === itemId) {
-          const newIndividualPayments = [...(item.individualPayments || Array(item.numberOfPayments || 1).fill(0))];
-          let paymentLogged = false;
-          for (let i = 0; i < newIndividualPayments.length; i++) {
-            if ((newIndividualPayments[i] === 0 || newIndividualPayments[i] === undefined) && !paymentLogged) {
-              newIndividualPayments[i] = paymentAmount;
-              paymentLogged = true;
-              break; 
-            }
-          }
-          
-          if (paymentLogged) {
-            let currentTotalPaid = newIndividualPayments.reduce((sum, p) => sum + (p || 0), 0);
-            if (currentTotalPaid > item.totalPrice) {
-                const overPayment = currentTotalPaid - item.totalPrice;
-                const lastLoggedPaymentIndex = newIndividualPayments.findIndex((p, idx) => idx >= 0 && (newIndividualPayments[idx] === paymentAmount && (newIndividualPayments.slice(0, idx).filter(val => val === paymentAmount).length === 0)));
-
-
-                 if (lastLoggedPaymentIndex !== -1) {
-                    newIndividualPayments[lastLoggedPaymentIndex] = Math.max(0, paymentAmount - overPayment);
-                 }
-            }
-            return { 
-              ...item, 
-              individualPayments: newIndividualPayments
-            };
-          }
-        }
-        return item;
-      });
-      return { ...prev, items: updatedItems };
-    });
-    const itemData = appData.items.find(i => i.id === itemId);
-    if (itemData) {
-      toast({ title: "Payment Logged", description: `Payment of ${appData.budget.currencySymbol}${paymentAmount.toFixed(2)} logged for ${itemData.name}.` });
-    }
-    setIsLogPaymentModalOpen(false);
-  }, [setAppData, appData.items, appData.budget.currencySymbol, toast]);
-
-
-  const displayItems: DisplayPurchaseItem[] = useMemo(() => {
-    let items = appData.items.map(item => {
-      const storedItemWithDefaults: StoredPurchaseItem = {
-        id: item.id,
-        name: item.name,
-        totalPrice: item.totalPrice ?? 0,
-        notes: item.notes,
-        numberOfPayments: item.numberOfPayments ?? 1,
-        individualPayments: item.individualPayments && item.individualPayments.length > 0 
-            ? item.individualPayments 
-            : Array(item.numberOfPayments || 1).fill(0),
-        includeInSpendCalculation: item.includeInSpendCalculation ?? true,
-      };
-      return enrichPurchaseItem(storedItemWithDefaults);
-    });
-
-    if (filterStatus !== 'All') {
-      items = items.filter(item => item.status === filterStatus);
-    }
-
-    if (searchTerm) {
-      items = items.filter(item =>
-        item.name.toLowerCase().includes(searchTerm.toLowerCase())
-      );
-    }
     
-    items.sort((a, b) => {
-      let valA = a[sortConfig.field];
-      let valB = b[sortConfig.field];
+    // Migration logic
+    const oldDataRaw = typeof window !== 'undefined' ? window.localStorage.getItem(OLD_LOCAL_STORAGE_KEY) : null;
+    const newDataRaw = typeof window !== 'undefined' ? window.localStorage.getItem(LOCAL_STORAGE_KEY_ALL_BUILDS) : null;
 
-      if (sortConfig.field === 'status') {
-        const statusOrder: Record<ItemStatus, number> = { 'Pending': 1, 'Partially Paid': 2, 'Paid': 3 };
-        valA = statusOrder[a.status];
-        valB = statusOrder[b.status];
-      } else if (sortConfig.field === 'paidAmount') { 
-        valA = a.paidAmount;
-        valB = b.paidAmount;
+    if (oldDataRaw && !newDataRaw) { // Only migrate if old data exists and new data doesn't
+      try {
+        const oldData: OldAppData = JSON.parse(oldDataRaw);
+        if (oldData && oldData.items && oldData.budget) { // Basic check for old data structure
+          
+          const migratedItems = oldData.items.map(item => {
+            const oldItem = item as any;
+            let individualPayments = item.individualPayments;
+            let numberOfPayments = item.numberOfPayments ?? 1;
+    
+            if (!individualPayments && typeof oldItem.paidAmount !== 'undefined') {
+              individualPayments = Array(numberOfPayments).fill(0);
+              if (oldItem.paymentsMade === 1 && numberOfPayments === 1 && oldItem.paidAmount > 0) {
+                individualPayments[0] = oldItem.paidAmount;
+              }
+            } else if (individualPayments && individualPayments.length !== numberOfPayments) {
+                const correctedPayments = Array(numberOfPayments).fill(0);
+                for(let i=0; i< Math.min(individualPayments.length, correctedPayments.length); i++) {
+                    correctedPayments[i] = individualPayments[i];
+                }
+                individualPayments = correctedPayments;
+            } else if (!individualPayments) {
+                individualPayments = Array(numberOfPayments).fill(0);
+            }
+            
+            return {
+                id: item.id,
+                name: item.name,
+                totalPrice: item.totalPrice ?? 0,
+                notes: item.notes,
+                numberOfPayments: numberOfPayments,
+                individualPayments: individualPayments,
+                includeInSpendCalculation: item.includeInSpendCalculation ?? true,
+              } as OldStoredPurchaseItem;
+          });
+
+          const migratedList: BuildList = {
+            id: crypto.randomUUID(),
+            name: "My Migrated Build",
+            createdAt: new Date().toISOString(),
+            version: APP_DATA_VERSION,
+            budget: oldData.budget,
+            items: migratedItems,
+          };
+          setAllBuilds({ lists: [migratedList] });
+          if (typeof window !== 'undefined') window.localStorage.removeItem(OLD_LOCAL_STORAGE_KEY);
+          toast({ title: "Data Migrated", description: "Your previous build has been moved to a new list." });
+        }
+      } catch (error) {
+        console.error("Error migrating old data:", error);
+        toast({ title: "Migration Error", description: "Could not automatically migrate your old build data.", variant: "destructive" });
       }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [toast]); // setAllBuilds removed from deps to prevent loop on init if initialAllBuilds is empty
 
-      let comparison = 0;
-      if (typeof valA === 'string' && typeof valB === 'string') {
-        comparison = valA.localeCompare(valB);
-      } else if (typeof valA === 'number' && typeof valB === 'number') {
-        comparison = valA - valB;
-      }
-      
-      return sortConfig.direction === 'asc' ? comparison : -comparison;
-    });
+  const handleCreateNewList = () => {
+    if (!newListName.trim()) {
+      toast({ title: "Error", description: "List name cannot be empty.", variant: "destructive" });
+      return;
+    }
+    const newListData: BuildListData = {
+      version: APP_DATA_VERSION,
+      budget: { totalBudget: 1500, currencySymbol: "$" },
+      items: [],
+    };
+    const newList: BuildList = {
+      ...newListData,
+      id: crypto.randomUUID(),
+      name: newListName.trim(),
+      createdAt: new Date().toISOString(),
+    };
+    setAllBuilds(prev => ({ lists: [...prev.lists, newList] }));
+    setNewListName("");
+    setIsCreateDialogOpen(false);
+    toast({ title: "List Created", description: `"${newList.name}" has been created.` });
+  };
 
-    return items;
-  }, [appData.items, filterStatus, sortConfig, searchTerm]);
-
-
+  const handleDeleteList = (listId: string) => {
+    const list = allBuilds.lists.find(l => l.id === listId);
+    if (list) {
+      setAllBuilds(prev => ({ lists: prev.lists.filter(l => l.id !== listId) }));
+      toast({ title: "List Deleted", description: `"${list.name}" has been deleted.`, variant: "destructive" });
+    }
+    setListToDelete(null);
+  };
+  
   if (!isClient) {
-    return (
+     return (
         <div className="min-h-screen bg-background text-foreground flex flex-col items-center justify-center">
             <div className="flex items-center space-x-2">
                 <svg className="animate-spin h-8 w-8 text-primary" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
@@ -280,76 +168,90 @@ export default function BuildMasterPage() {
     <div className="min-h-screen bg-background text-foreground flex flex-col">
       <Header />
       <main className="container mx-auto px-4 py-8 flex-grow">
-        <BudgetManager
-          budgetData={appData.budget}
-          items={displayItems}
-          onUpdateBudget={handleUpdateBudget}
-          onUpdateCurrency={handleUpdateCurrency}
-        />
-
-        <div className="mt-8 mb-6 flex justify-between items-center">
-          <h2 className="text-3xl font-headline text-primary">My Components</h2>
-          <Button onClick={openAddForm} variant="default" className="bg-accent hover:bg-accent/90 text-accent-foreground">
-            <PlusCircle className="mr-2 h-5 w-5" /> Add Item
+        <div className="flex justify-between items-center mb-8">
+          <h1 className="text-3xl font-headline text-primary flex items-center"><Home className="mr-3 h-8 w-8" /> My Build Lists</h1>
+          <Button onClick={() => setIsCreateDialogOpen(true)} variant="default" className="bg-accent hover:bg-accent/90 text-accent-foreground">
+            <PlusCircle className="mr-2 h-5 w-5" /> Create New List
           </Button>
         </div>
 
-        <SortFilterControls
-          sortConfig={sortConfig}
-          filterStatus={filterStatus}
-          searchTerm={searchTerm}
-          onSortChange={handleSortChange}
-          onFilterChange={setFilterStatus}
-          onSearchChange={setSearchTerm}
-        />
-        
-        {displayItems.length > 0 ? (
+        {allBuilds.lists.length > 0 ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {displayItems.map(item => (
-              <PurchaseItemCard
-                key={item.id}
-                item={item}
-                onEdit={() => openEditForm(appData.items.find(i => i.id === item.id)!)}
-                onDelete={handleDeleteItem}
-                onToggleIncludeInSpend={handleToggleIncludeInSpend}
-                onOpenLogPaymentModal={openLogPaymentModal}
-                currencySymbol={appData.budget.currencySymbol}
-              />
+            {allBuilds.lists.map(list => (
+              <Card key={list.id} className="flex flex-col shadow-lg hover:shadow-primary/30 transition-shadow duration-300 ease-in-out">
+                <CardHeader>
+                  <CardTitle className="font-headline text-xl">{list.name}</CardTitle>
+                  <CardDescription>Created: {new Date(list.createdAt).toLocaleDateString()}</CardDescription>
+                </CardHeader>
+                <CardContent className="flex-grow">
+                  <p>{list.items.length} item(s)</p>
+                  <p>Budget: {formatCurrency(list.budget.totalBudget, list.budget.currencySymbol)}</p>
+                </CardContent>
+                <CardFooter className="flex justify-between gap-2 border-t pt-4">
+                  <AlertDialog>
+                    <AlertDialogTrigger asChild>
+                      <Button variant="destructive" size="sm" onClick={(e) => { e.stopPropagation(); setListToDelete(list); }}>
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </AlertDialogTrigger>
+                    {listToDelete && listToDelete.id === list.id && (
+                       <AlertDialogContent>
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>Are you sure?</AlertDialogTitle>
+                          <AlertDialogDescription>
+                            This action will permanently delete the build list "{listToDelete.name}" and all its items. This cannot be undone.
+                          </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                          <AlertDialogCancel onClick={() => setListToDelete(null)}>Cancel</AlertDialogCancel>
+                          <AlertDialogAction onClick={() => handleDeleteList(listToDelete.id)}>Delete List</AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    )}
+                  </AlertDialog>
+                  <Link href={`/build/${list.id}`} passHref>
+                    <Button variant="outline" size="sm" className="flex-grow">
+                      View List <ExternalLink className="ml-2 h-4 w-4" />
+                    </Button>
+                  </Link>
+                </CardFooter>
+              </Card>
             ))}
           </div>
         ) : (
           <Card className="col-span-full text-center py-12 shadow">
             <CardContent className="flex flex-col items-center gap-4">
               <AlertTriangle className="h-12 w-12 text-muted-foreground" />
-              <p className="text-xl font-medium">No components found.</p>
-              <p className="text-muted-foreground">
-                {searchTerm ? "Try adjusting your search or filter criteria." : "Click \"Add Item\" to start building your list!"}
-              </p>
+              <p className="text-xl font-medium">No build lists found.</p>
+              <p className="text-muted-foreground">Click "Create New List" to get started!</p>
             </CardContent>
           </Card>
         )}
-
-        {appData.items.length > 0 && (
-            <div className="mt-12">
-                 <SummaryDashboard budgetData={appData.budget} items={displayItems} />
-            </div>
-        )}
-
-        <PurchaseItemForm
-          isOpen={isFormOpen}
-          onOpenChange={setIsFormOpen}
-          onSubmit={editingItem ? handleEditItem : handleAddItem}
-          initialData={editingItem}
-          currencySymbol={appData.budget.currencySymbol}
-        />
-        <LogPaymentDialog
-          isOpen={isLogPaymentModalOpen}
-          onOpenChange={setIsLogPaymentModalOpen}
-          itemBeingPaid={itemToLogPaymentFor}
-          currencySymbol={appData.budget.currencySymbol}
-          onSubmitLogPayment={handleLogPayment}
-        />
       </main>
+
+      <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Create New Build List</DialogTitle>
+            <DialogDescription>Enter a name for your new PC build list.</DialogDescription>
+          </DialogHeader>
+          <div className="py-4">
+            <Input
+              placeholder="e.g., Dream Gaming Rig"
+              value={newListName}
+              onChange={(e) => setNewListName(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleCreateNewList()}
+            />
+          </div>
+          <DialogFooter>
+            <DialogClose asChild>
+                <Button type="button" variant="secondary">Cancel</Button>
+            </DialogClose>
+            <Button onClick={handleCreateNewList} className="bg-primary hover:bg-primary/90 text-primary-foreground">Create List</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      
       <footer className="text-center py-6 border-t border-border text-sm text-muted-foreground">
         BuildMaster &copy; {new Date().getFullYear()} - Your Gaming PC Purchase Tracker
       </footer>
