@@ -4,14 +4,18 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import useLocalStorage from '@/hooks/useLocalStorage';
 import { auth } from '@/lib/firebaseConfig';
-import type { User, AuthError } from 'firebase/auth';
+import type { User, AuthError, ConfirmationResult, UserCredential } from 'firebase/auth';
 import { 
   onAuthStateChanged, 
   signInWithEmailAndPassword, 
   createUserWithEmailAndPassword, 
-  signOut as firebaseSignOut 
+  signOut as firebaseSignOut,
+  GoogleAuthProvider,
+  signInWithPopup,
+  RecaptchaVerifier,
+  signInWithPhoneNumber
 } from 'firebase/auth';
-import { useRouter } from 'next/navigation'; // For redirecting after auth changes
+import { useRouter } from 'next/navigation';
 
 export type Theme = 'dark' | 'theme-obsidian-dark' | 'theme-arctic-light';
 
@@ -65,6 +69,9 @@ interface AuthContextType {
   loading: boolean;
   login: (email: string, pass: string) => Promise<void>;
   signup: (email: string, pass: string) => Promise<void>;
+  signInWithGoogle: () => Promise<void>;
+  sendPhoneVerificationCode: (phoneNumber: string, recaptchaContainerID: string) => Promise<ConfirmationResult | null>;
+  confirmPhoneVerificationCode: (confirmationResult: ConfirmationResult, verificationCode: string) => Promise<void>;
   logout: () => Promise<void>;
   authError: string | null;
   setAuthError: (error: string | null) => void;
@@ -83,19 +90,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setUser(currentUser);
       setLoading(false);
       if (currentUser && (window.location.pathname === '/auth' || window.location.pathname === '/auth/')) {
-         router.push('/'); // Redirect if logged in and on auth page
+         router.push('/'); 
       }
     });
     return () => unsubscribe();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // router removed from deps to prevent re-runs on navigation
+  }, []); 
 
   const login = async (email: string, pass: string) => {
     setLoading(true);
     setAuthError(null);
     try {
       await signInWithEmailAndPassword(auth, email, pass);
-      // onAuthStateChanged will handle user state update and redirect
     } catch (error) {
       setAuthError((error as AuthError).message || 'Failed to login.');
       console.error("Login error:", error);
@@ -109,7 +115,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setAuthError(null);
     try {
       await createUserWithEmailAndPassword(auth, email, pass);
-      // onAuthStateChanged will handle user state update and redirect
     } catch (error) {
       setAuthError((error as AuthError).message || 'Failed to sign up.');
       console.error("Signup error:", error);
@@ -118,13 +123,83 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  const signInWithGoogle = async () => {
+    setLoading(true);
+    setAuthError(null);
+    const provider = new GoogleAuthProvider();
+    try {
+      await signInWithPopup(auth, provider);
+    } catch (error) {
+      setAuthError((error as AuthError).message || 'Failed to sign in with Google.');
+      console.error("Google sign-in error:", error);
+    } finally {
+      setLoading(false);
+    }
+  };
+  
+  const sendPhoneVerificationCode = async (phoneNumber: string, recaptchaContainerID: string): Promise<ConfirmationResult | null> => {
+    setLoading(true);
+    setAuthError(null);
+    try {
+      // Ensure window.recaptchaVerifier is only created once or handled if it exists
+      if (!(window as any).recaptchaVerifierInstance) {
+        (window as any).recaptchaVerifierInstance = new RecaptchaVerifier(auth, recaptchaContainerID, {
+          'size': 'invisible', // Can be 'normal' or 'compact' or 'invisible'
+          'callback': (response: any) => {
+            // reCAPTCHA solved, allow signInWithPhoneNumber.
+            // This callback is for visible reCAPTCHA. For invisible, it's often not needed here.
+          },
+          'expired-callback': () => {
+            // Response expired. Ask user to solve reCAPTCHA again.
+             setAuthError("reCAPTCHA verification expired. Please try sending the code again.");
+             if((window as any).recaptchaVerifierInstance) {
+                (window as any).recaptchaVerifierInstance.clear(); // Clear the existing instance
+                delete (window as any).recaptchaVerifierInstance; // Remove it
+             }
+          }
+        });
+      }
+      const appVerifier = (window as any).recaptchaVerifierInstance;
+      const confirmationResult = await signInWithPhoneNumber(auth, phoneNumber, appVerifier);
+      setLoading(false);
+      return confirmationResult;
+    } catch (error) {
+      setAuthError((error as AuthError).message || 'Failed to send verification code.');
+      console.error("Phone verification send error:", error);
+      // Clean up reCAPTCHA if it was created and an error occurred
+      if ((window as any).recaptchaVerifierInstance) {
+        (window as any).recaptchaVerifierInstance.clear();
+        delete (window as any).recaptchaVerifierInstance;
+      }
+      setLoading(false);
+      return null;
+    }
+  };
+
+  const confirmPhoneVerificationCode = async (confirmationResult: ConfirmationResult, verificationCode: string) => {
+    setLoading(true);
+    setAuthError(null);
+    try {
+      await confirmationResult.confirm(verificationCode);
+    } catch (error) {
+      setAuthError((error as AuthError).message || 'Failed to verify code.');
+      console.error("Phone verification confirm error:", error);
+    } finally {
+      setLoading(false);
+       if ((window as any).recaptchaVerifierInstance) {
+        (window as any).recaptchaVerifierInstance.clear();
+        delete (window as any).recaptchaVerifierInstance;
+      }
+    }
+  };
+
+
   const logout = async () => {
     setLoading(true);
     setAuthError(null);
     try {
       await firebaseSignOut(auth);
-      // onAuthStateChanged will handle user state update
-      router.push('/auth'); // Redirect to auth page after logout
+      router.push('/auth'); 
     } catch (error) {
       setAuthError((error as AuthError).message || 'Failed to logout.');
       console.error("Logout error:", error);
@@ -133,7 +208,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const value = { user, loading, login, signup, logout, authError, setAuthError };
+  const value = { 
+    user, 
+    loading, 
+    login, 
+    signup, 
+    signInWithGoogle,
+    sendPhoneVerificationCode,
+    confirmPhoneVerificationCode,
+    logout, 
+    authError, 
+    setAuthError 
+  };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
