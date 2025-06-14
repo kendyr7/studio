@@ -1,7 +1,7 @@
 
 "use client";
 
-import * as React from "react"; // Added React import
+import * as React from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import * as z from "zod";
@@ -56,7 +56,7 @@ interface PurchaseItemFormProps {
   isOpen: boolean;
   onOpenChange: (isOpen: boolean) => void;
   onSubmit: (data: PurchaseItemFormData) => void;
-  initialData?: StoredPurchaseItem; // StoredPurchaseItem already includes numberOfPayments and paymentsMade
+  initialData?: StoredPurchaseItem;
   currencySymbol?: string;
 }
 
@@ -67,76 +67,52 @@ export function PurchaseItemForm({
   initialData,
   currencySymbol = "$",
 }: PurchaseItemFormProps) {
+
+  const getSafeFormValues = React.useCallback((data?: StoredPurchaseItem) => {
+    if (data) {
+      return {
+        name: data.name || "",
+        totalPrice: data.totalPrice ?? 0,
+        paidAmount: data.paidAmount ?? 0,
+        numberOfPayments: (data.numberOfPayments === undefined || data.numberOfPayments === null)
+                          ? (data.totalPrice > 0 ? 1 : 0) // Default based on totalPrice if undefined
+                          : data.numberOfPayments,
+        notes: data.notes || "",
+        includeInSpendCalculation: data.includeInSpendCalculation ?? true,
+      };
+    }
+    // Defaults for a new item
+    return {
+      name: "",
+      totalPrice: 0,
+      paidAmount: 0,
+      numberOfPayments: 1,
+      notes: "",
+      includeInSpendCalculation: true,
+    };
+  }, []); // No dependencies needed as initialData is passed as argument
+
   const form = useForm<PurchaseItemFormData>({
     resolver: zodResolver(purchaseItemSchema),
-    defaultValues: initialData
-      ? {
-          name: initialData.name,
-          totalPrice: initialData.totalPrice,
-          paidAmount: initialData.paidAmount,
-          numberOfPayments: initialData.numberOfPayments,
-          notes: initialData.notes || "",
-          includeInSpendCalculation: initialData.includeInSpendCalculation,
-        }
-      : {
-          name: "",
-          totalPrice: 0,
-          paidAmount: 0,
-          numberOfPayments: 1,
-          notes: "",
-          includeInSpendCalculation: true,
-        },
+    defaultValues: getSafeFormValues(initialData),
   });
 
-  // When initialData changes, reset the form
   React.useEffect(() => {
-    if (initialData) {
-      form.reset({
-        name: initialData.name,
-        totalPrice: initialData.totalPrice,
-        paidAmount: initialData.paidAmount,
-        numberOfPayments: initialData.numberOfPayments,
-        notes: initialData.notes || "",
-        includeInSpendCalculation: initialData.includeInSpendCalculation,
-      });
-    } else {
-      form.reset({
-        name: "",
-        totalPrice: 0,
-        paidAmount: 0,
-        numberOfPayments: 1,
-        notes: "",
-        includeInSpendCalculation: true,
-      });
-    }
-  }, [initialData, form]);
+    // When initialData changes, reset the form with potentially new defaults
+    form.reset(getSafeFormValues(initialData));
+  }, [initialData, form, getSafeFormValues]);
 
 
   const handleFormSubmit = (data: PurchaseItemFormData) => {
     onSubmit(data);
-    // form.reset(); // Reset is handled by useEffect or onOpenChange
-    onOpenChange(false);
+    onOpenChange(false); // This will trigger the onOpenChange logic below to reset form
   };
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => {
       onOpenChange(open);
-      if (!open) { // Reset form when dialog closes if not submitting
-        form.reset(initialData ? {
-             name: initialData.name,
-            totalPrice: initialData.totalPrice,
-            paidAmount: initialData.paidAmount,
-            numberOfPayments: initialData.numberOfPayments,
-            notes: initialData.notes || "",
-            includeInSpendCalculation: initialData.includeInSpendCalculation,
-        } : {
-            name: "",
-            totalPrice: 0,
-            paidAmount: 0,
-            numberOfPayments: 1,
-            notes: "",
-            includeInSpendCalculation: true,
-        });
+      if (!open) {
+        form.reset(getSafeFormValues(initialData)); // Reset form with correct defaults when dialog closes
       }
     }}>
       <DialogContent className="sm:max-w-[480px] bg-card text-card-foreground">
